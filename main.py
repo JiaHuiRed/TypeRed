@@ -1,0 +1,1110 @@
+# author Red
+# TypeRed — Markdown Reader & Editor v0.3.2
+#//#260518 Red 0.3.0 编辑模式/实时预览/Markdown格式快捷键/上下标高亮渲染
+#//#260518 Red 0.3.1 欢迎页详细化/修复代码围栏嵌套渲染/README补全快捷键
+#//#260518 Red 0.3.2 pygments_css缓存/字数统计/编辑模式Ctrl+F指向编辑区
+
+import sys
+import os
+import re
+import ctypes
+from functools import lru_cache
+
+import markdown
+from markdown.extensions.toc import TocExtension
+from pygments.formatters import HtmlFormatter
+
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QFileDialog, QLabel, QPushButton, QSizeGrip, QMenu,
+    QPlainTextEdit, QSplitter
+)
+from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtWebEngineCore import QWebEnginePage
+from PySide6.QtCore import (
+    Qt, QUrl, QPointF, QRectF, QEvent, QObject,
+    QFileSystemWatcher, QSettings, QSize, QPoint, QTimer
+)
+from PySide6.QtGui import (
+    QIcon, QDragEnterEvent, QDropEvent, QKeySequence, QShortcut,
+    QPainter, QColor, QPixmap, QFont, QPainterPath, QLinearGradient,
+    QMouseEvent, QAction, QTextCursor
+)
+from PySide6.QtPrintSupport import QPrinter
+
+VERSION  = "0.3.2"
+APP_NAME = "TypeRed"
+BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+MAX_RECENT = 10
+
+# ── 主题定义 ──────────────────────────────────────────────────────────────────
+
+THEMES      = ['light', 'eye-care', 'cream', 'dark', 'night']
+THEME_NAMES = ['默认',  '护眼',    '米黄',  '暗色', '夜间']
+
+# (bg, fg, divider_border, btn_border, btn_fg)
+THEME_TB: dict[str, tuple[str, str, str, str, str]] = {
+    'light':    ('#ececec', '#2a2a2a', '#d0d0d0', '#b8b8b8', '#2a2a2a'),
+    'eye-care': ('#d8edd8', '#1a2e1a', '#b8d8b8', '#88bb88', '#1a2e1a'),
+    'cream':    ('#e8dcc0', '#2c1f0a', '#ccb888', '#aa8844', '#2c1f0a'),
+    'dark':     ('#14151e', '#c0caf5', '#2a2b3d', '#5a5c7e', '#dde0ff'),
+    'night':    ('#0d0d0d', '#d0d0d0', '#222222', '#505050', '#f0f0f0'),
+}
+
+THEME_DOT: dict[str, str] = {
+    'light':    '#c8c8c8',
+    'eye-care': '#6db86d',
+    'cream':    '#c8a050',
+    'dark':     '#5b6aae',
+    'night':    '#3a3a3a',
+}
+
+THEME_PYG: dict[str, str] = {
+    'light':    'friendly',
+    'eye-care': 'friendly',
+    'cream':    'autumn',
+    'dark':     'monokai',
+    'night':    'monokai',
+}
+
+# 编辑器 bg / fg / 行号区 bg
+THEME_EDITOR: dict[str, tuple[str, str]] = {
+    'light':    ('#ffffff', '#1a1a1a'),
+    'eye-care': ('#f0f7f0', '#1a2e1a'),
+    'cream':    ('#fdf6e3', '#2c1f0a'),
+    'dark':     ('#1a1b26', '#c0caf5'),
+    'night':    ('#0a0a0a', '#cccccc'),
+}
+
+# ── 程序化图标 ────────────────────────────────────────────────────────────────
+
+def make_app_icon() -> QIcon:
+    size = 256
+    pix  = QPixmap(size, size)
+    pix.fill(Qt.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.Antialiasing)
+    grad = QLinearGradient(QPointF(0, 0), QPointF(size, size))
+    grad.setColorAt(0.0, QColor('#5b7cf7'))
+    grad.setColorAt(1.0, QColor('#8b5cf6'))
+    path = QPainterPath()
+    path.addRoundedRect(QRectF(10, 10, size - 20, size - 20), 54, 54)
+    p.fillPath(path, grad)
+    font = QFont('Segoe UI', 100, QFont.Bold)
+    p.setFont(font)
+    p.setPen(QColor(255, 255, 255, 230))
+    p.drawText(pix.rect(), Qt.AlignCenter, 'TR')
+    p.end()
+    return QIcon(pix)
+
+
+# ── Markdown 渲染 ─────────────────────────────────────────────────────────────
+
+def _build_extensions() -> list:
+    base = [
+        'fenced_code', 'tables', 'attr_list', 'def_list',
+        'footnotes', 'nl2br',
+        TocExtension(permalink=True, toc_depth='2-4'),
+        'codehilite', 'sane_lists',
+    ]
+    # 尝试加载 pymdownx 扩展（上标/下标/高亮）
+    optional = ['pymdownx.mark', 'pymdownx.tilde', 'pymdownx.caret']
+    for ext in optional:
+        try:
+            import importlib
+            importlib.import_module(ext.replace('.', '/').replace('/', '.'))
+            base.append(ext)
+        except Exception:
+            pass
+    return base
+
+MD_EXTENSIONS = _build_extensions()
+
+
+def render_markdown(text: str) -> tuple[str, str]:
+    md = markdown.Markdown(
+        extensions=MD_EXTENSIONS,
+        extension_configs={'codehilite': {'guess_lang': False, 'linenums': False}}
+    )
+    body = md.convert(text)
+    toc  = getattr(md, 'toc', '')
+    return body, toc
+
+
+@lru_cache(maxsize=None)
+def pygments_css(theme: str) -> str:
+    try:
+        return HtmlFormatter(style=THEME_PYG.get(theme, 'friendly')).get_style_defs('.codehilite')
+    except Exception:
+        return ''
+
+
+def build_page(body: str, toc: str, theme: str, title: str = '') -> str:
+    css_path  = os.path.join(BASE_DIR, 'frontend', 'style.css').replace('\\', '/')
+    toc_block = f'<nav id="toc">{toc}</nav>' if toc.strip() else ''
+    return f"""<!DOCTYPE html>
+<html class="{theme}">
+<head>
+<meta charset="utf-8">
+<title>{title}</title>
+<link rel="stylesheet" href="file:///{css_path}">
+<style>{pygments_css(theme)}</style>
+</head>
+<body>
+<div id="layout">
+  {toc_block}
+  <article id="content">{body}</article>
+</div>
+<script>
+  document.querySelectorAll('#toc a').forEach(a => {{
+    a.addEventListener('click', e => {{
+      const id = a.getAttribute('href').replace(/.*#/, '');
+      const el = document.getElementById(id);
+      if (el) {{ e.preventDefault(); el.scrollIntoView({{behavior:'smooth'}}); }}
+    }});
+  }});
+</script>
+</body>
+</html>"""
+
+
+# ── 拖拽过滤器 ────────────────────────────────────────────────────────────────
+
+class DragFilter(QObject):
+    _EXTS = ('.md', '.markdown', '.mdown', '.txt')
+
+    def __init__(self, win: 'TypeRedWindow'):
+        super().__init__(win)
+        self._win = win
+
+    def eventFilter(self, obj, event):
+        t = event.type()
+        if t == QEvent.Type.DragEnter:
+            for u in event.mimeData().urls():
+                if u.toLocalFile().lower().endswith(self._EXTS):
+                    event.acceptProposedAction()
+                    return True
+        elif t == QEvent.Type.Drop:
+            for u in event.mimeData().urls():
+                path = u.toLocalFile()
+                if path.lower().endswith(self._EXTS):
+                    self._win.load_file(path)
+                    return True
+        return False
+
+
+# ── Markdown 编辑器 ───────────────────────────────────────────────────────────
+
+class Editor(QPlainTextEdit):
+    """带 Markdown 格式快捷键的纯文本编辑器。"""
+
+    def __init__(self, on_change):
+        super().__init__()
+        self._on_change = on_change
+        self.setFont(QFont('Cascadia Code, JetBrains Mono, Consolas, Courier New', 13))
+        self.setLineWrapMode(QPlainTextEdit.WidgetWidth)
+        self.setTabStopDistance(28)  # 约4个字符宽
+        self.textChanged.connect(on_change)
+
+    # ── 格式包裹 ──────────────────────────────────────────────────────────────
+
+    def _wrap(self, marker: str, end: str = ''):
+        if not end:
+            end = marker
+        cur = self.textCursor()
+        if cur.hasSelection():
+            text = cur.selectedText()
+            cur.insertText(f'{marker}{text}{end}')
+        else:
+            pos = cur.position()
+            cur.insertText(f'{marker}{end}')
+            cur.setPosition(pos + len(marker))
+            self.setTextCursor(cur)
+
+    # ── 标题行 ────────────────────────────────────────────────────────────────
+
+    def _set_heading(self, level: int):
+        cur = self.textCursor()
+        cur.movePosition(QTextCursor.StartOfLine)
+        cur.movePosition(QTextCursor.EndOfLine, QTextCursor.KeepAnchor)
+        line = cur.selectedText()
+        line = re.sub(r'^#{1,6}\s*', '', line)
+        prefix = '#' * level + ' ' if level > 0 else ''
+        cur.insertText(prefix + line)
+
+    # ── 列表 ──────────────────────────────────────────────────────────────────
+
+    def _toggle_list(self, ordered: bool):
+        cur = self.textCursor()
+        cur.movePosition(QTextCursor.StartOfLine)
+        cur.movePosition(QTextCursor.EndOfLine, QTextCursor.KeepAnchor)
+        line = cur.selectedText()
+        # 已有列表标记则去掉
+        if re.match(r'^(\d+\.\s+|-\s+)', line):
+            line = re.sub(r'^(\d+\.\s+|-\s+)', '', line)
+        else:
+            line = ('1. ' if ordered else '- ') + line
+        cur.insertText(line)
+
+    # ── Tab 缩进 ──────────────────────────────────────────────────────────────
+
+    def keyPressEvent(self, e):
+        # Tab → 4 空格
+        if e.key() == Qt.Key_Tab and not e.modifiers():
+            self.insertPlainText('    ')
+            return
+        # Shift+Tab → 去除前4空格
+        if e.key() == Qt.Key_Backtab:
+            cur = self.textCursor()
+            cur.movePosition(QTextCursor.StartOfLine)
+            cur.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor,
+                             min(4, len(self.document().findBlockByNumber(
+                                 cur.blockNumber()).text())))
+            txt = cur.selectedText()
+            stripped = re.sub(r'^ {1,4}', '', txt)
+            cur.insertText(stripped)
+            return
+        # Ctrl+B 粗体
+        if e.key() == Qt.Key_B and e.modifiers() == Qt.ControlModifier:
+            self._wrap('**')
+            return
+        # Ctrl+I 斜体
+        if e.key() == Qt.Key_I and e.modifiers() == Qt.ControlModifier:
+            self._wrap('*')
+            return
+        # Ctrl+Shift+S 删除线
+        if e.key() == Qt.Key_S and e.modifiers() == (Qt.ControlModifier | Qt.ShiftModifier):
+            self._wrap('~~')
+            return
+        # Ctrl+Shift+H 高亮
+        if e.key() == Qt.Key_H and e.modifiers() == (Qt.ControlModifier | Qt.ShiftModifier):
+            self._wrap('==')
+            return
+        # Ctrl+Shift+P 上标 ^
+        if e.key() == Qt.Key_P and e.modifiers() == (Qt.ControlModifier | Qt.ShiftModifier):
+            self._wrap('^')
+            return
+        # Ctrl+Shift+B 下标 ~
+        if e.key() == Qt.Key_B and e.modifiers() == (Qt.ControlModifier | Qt.ShiftModifier):
+            self._wrap('~')
+            return
+        # Ctrl+1~6 标题
+        if e.modifiers() == Qt.ControlModifier and Qt.Key_1 <= e.key() <= Qt.Key_6:
+            self._set_heading(e.key() - Qt.Key_0)
+            return
+        # Ctrl+0 取消标题
+        if e.key() == Qt.Key_0 and e.modifiers() == Qt.ControlModifier:
+            self._set_heading(0)
+            return
+        # Ctrl+Shift+U 无序列表
+        if e.key() == Qt.Key_U and e.modifiers() == (Qt.ControlModifier | Qt.ShiftModifier):
+            self._toggle_list(False)
+            return
+        # Ctrl+Shift+O 有序列表
+        if e.key() == Qt.Key_O and e.modifiers() == (Qt.ControlModifier | Qt.ShiftModifier):
+            self._toggle_list(True)
+            return
+        super().keyPressEvent(e)
+
+    def apply_theme(self, theme: str):
+        bg, fg = THEME_EDITOR[theme]
+        _, _, border, _, _ = THEME_TB[theme]
+        self.setStyleSheet(f"""
+            QPlainTextEdit {{
+                background: {bg};
+                color: {fg};
+                border: none;
+                border-right: 1px solid {border};
+                font-family: 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
+                font-size: 13px;
+                padding: 12px 16px;
+                selection-background-color: rgba(91,124,247,0.35);
+            }}
+        """)
+
+
+# ── macOS 交通灯 ──────────────────────────────────────────────────────────────
+
+class TrafficLights(QWidget):
+    _COLORS = ('#ff5f57', '#febc2e', '#28c840')
+
+    def __init__(self, win: QMainWindow):
+        super().__init__(win)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(7)
+        btns = []
+        for color in self._COLORS:
+            btn = QPushButton()
+            btn.setFixedSize(13, 13)
+            btn.setStyleSheet(f"""
+                QPushButton {{ background: {color}; border-radius: 6px; border: none; }}
+                QPushButton:pressed {{ opacity: 0.7; }}
+            """)
+            btns.append(btn)
+            layout.addWidget(btn)
+        btns[0].clicked.connect(win.close)
+        btns[1].clicked.connect(win.showMinimized)
+        btns[2].clicked.connect(
+            lambda: win.showNormal() if win.isMaximized() else win.showMaximized()
+        )
+
+
+# ── 主题圆点 ──────────────────────────────────────────────────────────────────
+
+class ThemeDots(QWidget):
+    def __init__(self, on_change):
+        super().__init__()
+        self._btns: list[QPushButton] = []
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(5)
+        for theme, name, color in zip(THEMES, THEME_NAMES, THEME_DOT.values()):
+            btn = QPushButton()
+            btn.setFixedSize(16, 16)
+            btn.setToolTip(name)
+            btn._theme = theme   # type: ignore[attr-defined]
+            btn._color = color   # type: ignore[attr-defined]
+            btn.clicked.connect(lambda _, t=theme: on_change(t))
+            self._btns.append(btn)
+            layout.addWidget(btn)
+        self.set_active('light')
+
+    def set_active(self, active_theme: str):
+        for btn in self._btns:
+            sel    = btn._theme == active_theme  # type: ignore[attr-defined]
+            ring   = '2px solid rgba(255,255,255,0.85)' if sel else '2px solid transparent'
+            shadow = 'box-shadow: 0 0 0 1px rgba(0,0,0,0.3);' if sel else ''
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: {btn._color};
+                    border-radius: 8px;
+                    border: {ring};
+                    {shadow}
+                }}
+            """)
+
+
+# ── 自定义标题栏 ──────────────────────────────────────────────────────────────
+
+class TitleBar(QWidget):
+    def __init__(self, win: 'TypeRedWindow'):
+        super().__init__(win)
+        self._win      = win
+        self._drag_pos = None
+        self.setFixedHeight(38)
+        self.setObjectName('titlebar')
+
+        root = QHBoxLayout(self)
+        root.setContentsMargins(10, 0, 12, 0)
+        root.setSpacing(8)
+
+        root.addWidget(TrafficLights(win))
+        root.addSpacing(6)
+
+        self.icon_lbl = QLabel()
+        self.icon_lbl.setFixedSize(18, 18)
+        root.addWidget(self.icon_lbl)
+        root.addSpacing(4)
+
+        self.lbl_title = QLabel(APP_NAME)
+        self.lbl_title.setObjectName('tb_title')
+        root.addWidget(self.lbl_title)
+
+        root.addStretch()
+
+        self.theme_dots = ThemeDots(win.set_theme)
+        root.addWidget(self.theme_dots)
+        root.addSpacing(8)
+
+        self.btn_edit = QPushButton('编辑')
+        self.btn_edit.setObjectName('tb_btn')
+        self.btn_edit.setFixedSize(46, 24)
+        self.btn_edit.clicked.connect(win.toggle_edit)
+        root.addWidget(self.btn_edit)
+        root.addSpacing(4)
+
+        self.btn_recent = QPushButton('最近')
+        self.btn_recent.setObjectName('tb_btn')
+        self.btn_recent.setFixedSize(46, 24)
+        self.btn_recent.clicked.connect(self._show_recent_menu)
+        root.addWidget(self.btn_recent)
+        root.addSpacing(4)
+
+        self.btn_open = QPushButton('打开')
+        self.btn_open.setObjectName('tb_btn')
+        self.btn_open.setFixedSize(46, 24)
+        self.btn_open.clicked.connect(win.open_file_dialog)
+        root.addWidget(self.btn_open)
+
+    def set_icon(self, icon: QIcon):
+        self.icon_lbl.setPixmap(icon.pixmap(18, 18))
+
+    def apply_theme(self, theme: str):
+        # 标题栏固定中性风格，不随内容主题变化
+        self.setStyleSheet("""
+            TitleBar { background: #f0f0f0; border-bottom: 1px solid #d0d0d0; }
+            #tb_title { color: #2a2a2a; font-size: 13px; font-weight: 600; }
+        """)
+        self._btn_normal_style = """
+            QPushButton {
+                background: #f0f0f0;
+                color: #2a2a2a;
+                border: 1px solid #c0c0c0;
+                border-radius: 5px;
+                font-size: 12px;
+                font-weight: 500;
+            }
+            QPushButton:hover   { background: #e0e0e0; }
+            QPushButton:pressed { background: #d0d0d0; }
+        """
+        for btn in (self.btn_edit, self.btn_recent, self.btn_open):
+            btn.setStyleSheet(self._btn_normal_style)
+        self.theme_dots.set_active(theme)
+
+    def _show_recent_menu(self):
+        recent = self._win.get_recent_files()
+        if not recent:
+            return
+        menu = QMenu(self)
+        bg, fg, border, _, _ = THEME_TB[self._win.theme]
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background: {bg}; color: {fg};
+                border: 1px solid {border};
+                padding: 4px 0; font-size: 12px;
+            }}
+            QMenu::item {{ padding: 5px 20px; }}
+            QMenu::item:selected {{ background: rgba(128,128,128,0.2); }}
+        """)
+        for path in recent:
+            act = QAction(os.path.basename(path), self)
+            act.setToolTip(path)
+            act.triggered.connect(lambda _, p=path: self._win.load_file(p))
+            menu.addAction(act)
+        menu.addSeparator()
+        clear = QAction('清空记录', self)
+        clear.triggered.connect(self._win.clear_recent_files)
+        menu.addAction(clear)
+        menu.exec(self.btn_recent.mapToGlobal(self.btn_recent.rect().bottomLeft()))
+
+    def set_edit_active(self, active: bool):
+        """编辑模式时「编辑」按钮高亮。"""
+        if active:
+            self.btn_edit.setStyleSheet("""
+                QPushButton {
+                    background: rgba(91,124,247,0.18);
+                    color: #3a5ad4;
+                    border: 1px solid rgba(91,124,247,0.55);
+                    border-radius: 5px;
+                    font-size: 12px;
+                    font-weight: 600;
+                }
+                QPushButton:hover { background: rgba(91,124,247,0.28); }
+            """)
+        else:
+            # 恢复到 apply_theme 时存储的普通样式
+            if hasattr(self, '_btn_normal_style'):
+                self.btn_edit.setStyleSheet(self._btn_normal_style)
+
+    def mousePressEvent(self, e: QMouseEvent):
+        if e.button() == Qt.LeftButton:
+            self._drag_pos = e.globalPosition().toPoint() - self._win.frameGeometry().topLeft()
+
+    def mouseMoveEvent(self, e: QMouseEvent):
+        if self._drag_pos and e.buttons() & Qt.LeftButton:
+            self._win.move(e.globalPosition().toPoint() - self._drag_pos)
+
+    def mouseReleaseEvent(self, e: QMouseEvent):
+        self._drag_pos = None
+
+    def mouseDoubleClickEvent(self, e: QMouseEvent):
+        if self._win.isMaximized():
+            self._win.showNormal()
+        else:
+            self._win.showMaximized()
+
+
+# ── 搜索栏 ────────────────────────────────────────────────────────────────────
+
+class SearchBar(QWidget):
+    def __init__(self, view: QWebEngineView, win: 'TypeRedWindow'):
+        super().__init__(win)
+        self._view   = view
+        self._editor = None   # 非 None 时搜索编辑区
+        self.setVisible(False)
+
+        from PySide6.QtWidgets import QLineEdit
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(6)
+
+        self.input = QLineEdit()
+        self.input.setPlaceholderText('搜索…')
+        self.input.setFixedHeight(26)
+        self.input.textChanged.connect(self._search)
+        self.input.returnPressed.connect(self._next)
+        layout.addWidget(self.input)
+
+        for label, fn in [('↑', self._prev), ('↓', self._next), ('✕', self.hide_bar)]:
+            btn = QPushButton(label)
+            btn.setFixedSize(26, 26)
+            btn.clicked.connect(fn)
+            layout.addWidget(btn)
+
+    def set_target(self, editor=None):
+        """切换搜索目标：editor=None 时搜预览区，否则搜编辑区。"""
+        self._editor = editor
+
+    def show_bar(self):
+        self.setVisible(True)
+        self.input.setFocus()
+        self.input.selectAll()
+
+    def hide_bar(self):
+        self.setVisible(False)
+        if self._editor:
+            cur = self._editor.textCursor()
+            cur.clearSelection()
+            self._editor.setTextCursor(cur)
+            self._editor.setFocus()
+        else:
+            self._view.findText('')
+            self._view.setFocus()
+
+    def _search(self, text: str):
+        if self._editor:
+            self._editor.find(text)
+        else:
+            self._view.findText(text)
+
+    def _next(self):
+        text = self.input.text()
+        if self._editor:
+            self._editor.find(text)
+        else:
+            self._view.findText(text)
+
+    def _prev(self):
+        from PySide6.QtGui import QTextDocument
+        text = self.input.text()
+        if self._editor:
+            self._editor.find(text, QTextDocument.FindFlag.FindBackward)
+        else:
+            self._view.findText(text, QWebEnginePage.FindFlag.FindBackward)
+
+    def apply_theme(self, theme: str):
+        bg, fg, border, btn_border, _ = THEME_TB[theme]
+        self.setStyleSheet(f"""
+            SearchBar {{
+                background: {bg};
+                border-top: 1px solid {border};
+            }}
+            QLineEdit {{
+                background: rgba(128,128,128,0.12);
+                color: {fg};
+                border: 1px solid {btn_border};
+                border-radius: 4px;
+                padding: 0 6px;
+                font-size: 13px;
+            }}
+            QPushButton {{
+                background: transparent;
+                color: {fg};
+                border: 1px solid {btn_border};
+                border-radius: 4px;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{ background: rgba(128,128,128,0.15); }}
+        """)
+
+    def keyPressEvent(self, e):
+        if e.key() == Qt.Key_Escape:
+            self.hide_bar()
+        else:
+            super().keyPressEvent(e)
+
+
+# ── 主窗口 ────────────────────────────────────────────────────────────────────
+
+class TypeRedWindow(QMainWindow):
+    def __init__(self, app_icon: QIcon):
+        super().__init__()
+        self.theme         = 'light'
+        self.current_file  = ''
+        self._current_text = ''
+        self._modified     = False
+        self._edit_mode    = False
+        self._app_icon     = app_icon
+        self._settings     = QSettings('Red', APP_NAME)
+        self._watcher      = QFileSystemWatcher(self)
+        self._watcher.fileChanged.connect(self._on_file_changed)
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.setInterval(400)
+        self._preview_timer.timeout.connect(self._update_preview)
+        self._build_ui()
+        self._restore_state()
+        self.setAcceptDrops(True)
+
+    # ── UI 构建 ───────────────────────────────────────────────────────────────
+
+    def _build_ui(self):
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
+        self.resize(1100, 780)
+        self.setMinimumSize(640, 420)
+        self.setWindowTitle(APP_NAME)
+        self.setWindowIcon(self._app_icon)
+
+        self.titlebar = TitleBar(self)
+        self.titlebar.set_icon(self._app_icon)
+        self.titlebar.apply_theme(self.theme)
+
+        # 编辑器 + 预览 分栏
+        self.editor = Editor(self._on_editor_changed)
+        self.editor.apply_theme(self.theme)
+        self.editor.setVisible(False)
+
+        self.view = QWebEngineView()
+        self.view.setAcceptDrops(False)
+        self._drag_filter = DragFilter(self)
+        self.view.installEventFilter(self._drag_filter)
+
+        self.splitter = QSplitter(Qt.Horizontal)
+        self.splitter.setHandleWidth(1)
+        self.splitter.addWidget(self.editor)
+        self.splitter.addWidget(self.view)
+
+        self.search_bar = SearchBar(self.view, self)
+        self.search_bar.apply_theme(self.theme)
+
+        self.statusBar().setSizeGripEnabled(False)
+        self.statusBar().addPermanentWidget(QSizeGrip(self))
+        self.statusBar().showMessage(f'{APP_NAME} v{VERSION}  |  拖入 .md 文件或点击「打开」')
+
+        central = QWidget()
+        layout  = QVBoxLayout(central)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self.titlebar)
+        layout.addWidget(self.splitter, 1)
+        layout.addWidget(self.search_bar)
+        self.setCentralWidget(central)
+
+        self._register_shortcuts()
+        self._show_welcome()
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        try:
+            GWL_STYLE      = -16
+            WS_MINIMIZEBOX = 0x00020000
+            WS_MAXIMIZEBOX = 0x00010000
+            hwnd  = int(self.winId())
+            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_STYLE)
+            ctypes.windll.user32.SetWindowLongW(hwnd, GWL_STYLE, style | WS_MINIMIZEBOX | WS_MAXIMIZEBOX)
+        except Exception:
+            pass
+        from PySide6.QtWidgets import QWidget as _QW
+        for child in self.view.findChildren(_QW):
+            child.setAcceptDrops(False)
+            child.installEventFilter(self._drag_filter)
+
+    # ── 状态持久化 ────────────────────────────────────────────────────────────
+
+    def _restore_state(self):
+        theme = self._settings.value('theme', 'light')
+        if theme in THEMES:
+            self.theme = theme
+            self.titlebar.apply_theme(theme)
+            self.search_bar.apply_theme(theme)
+            self.editor.apply_theme(theme)
+
+        pos  = self._settings.value('pos')
+        size = self._settings.value('size')
+        if isinstance(pos, QPoint):
+            self.move(pos)
+        if isinstance(size, QSize):
+            self.resize(size)
+
+        last = self._settings.value('last_file', '')
+        if last and os.path.isfile(last):
+            self.load_file(last)
+
+    def _save_state(self):
+        self._settings.setValue('theme',     self.theme)
+        self._settings.setValue('pos',       self.pos())
+        self._settings.setValue('size',      self.size())
+        self._settings.setValue('last_file', self.current_file)
+
+    def closeEvent(self, e):
+        self._save_state()
+        super().closeEvent(e)
+
+    # ── 最近文件 ──────────────────────────────────────────────────────────────
+
+    def get_recent_files(self) -> list[str]:
+        return self._settings.value('recent_files', []) or []
+
+    def _add_recent(self, path: str):
+        recent = self.get_recent_files()
+        if path in recent:
+            recent.remove(path)
+        recent.insert(0, path)
+        self._settings.setValue('recent_files', recent[:MAX_RECENT])
+
+    def clear_recent_files(self):
+        self._settings.setValue('recent_files', [])
+
+    # ── 快捷键 ────────────────────────────────────────────────────────────────
+
+    def _register_shortcuts(self):
+        QShortcut(QKeySequence('Ctrl+O'), self).activated.connect(self.open_file_dialog)
+        QShortcut(QKeySequence('Ctrl+T'), self).activated.connect(self._cycle_theme)
+        QShortcut(QKeySequence('Ctrl+F'), self).activated.connect(self._toggle_search)
+        QShortcut(QKeySequence('Ctrl+P'), self).activated.connect(self.export_pdf)
+        QShortcut(QKeySequence('Ctrl+R'), self).activated.connect(self._reload_from_disk)
+        QShortcut(QKeySequence('Ctrl+E'), self).activated.connect(self.toggle_edit)
+        QShortcut(QKeySequence('Ctrl+S'), self).activated.connect(self.save_file)
+        QShortcut(QKeySequence('Escape'), self).activated.connect(self.search_bar.hide_bar)
+
+    def _toggle_search(self):
+        if self._edit_mode:
+            self.search_bar.set_target(self.editor)
+        else:
+            self.search_bar.set_target(None)
+        self.search_bar.show_bar()
+
+    # ── 欢迎页 ────────────────────────────────────────────────────────────────
+
+    def _show_welcome(self):
+        welcome_md = f"""# 欢迎使用 {APP_NAME}
+
+**{APP_NAME}** 是一个轻量级本地 Markdown 阅读/编辑器，基于 PySide6 + QWebEngineView，渲染效果接近 GitHub 风格。
+
+支持拖拽 `.md` / `.markdown` / `.mdown` / `.txt` 文件直接打开，或通过 `Ctrl+O` 选择文件。
+
+## 快捷键
+
+### 文件操作
+
+| 快捷键     | 功能                     |
+|------------|--------------------------|
+| `Ctrl+O`   | 打开文件                 |
+| `Ctrl+S`   | 保存 / 另存为            |
+| `Ctrl+R`   | 从磁盘重新加载           |
+| `Ctrl+P`   | 导出 PDF                 |
+
+### 视图与导航
+
+| 快捷键      | 功能                     |
+|-------------|--------------------------|
+| `Ctrl+E`    | 切换编辑 / 阅读模式      |
+| `Ctrl+T`    | 循环切换主题（5 种）     |
+| `Ctrl+F`    | 搜索（阅读模式=页内，编辑模式=编辑区） |
+| `Ctrl+滚轮` | 缩放预览区               |
+
+### 编辑格式（编辑模式下）
+
+| 快捷键            | 效果                  | 示例              |
+|-------------------|-----------------------|-------------------|
+| `Ctrl+B`          | **粗体**              | `**文字**`        |
+| `Ctrl+I`          | *斜体*                | `*文字*`          |
+| `Ctrl+Shift+S`    | ~~删除线~~            | `~~文字~~`        |
+| `Ctrl+Shift+H`    | ==高亮==              | `==文字==`        |
+| `Ctrl+Shift+P`    | ^上标^                | `^文字^`          |
+| `Ctrl+Shift+B`    | ~下标~                | `~文字~`          |
+| `Ctrl+1` ~ `Ctrl+6` | H1 ~ H6 标题       | `# 标题`          |
+| `Ctrl+0`          | 取消标题              |                   |
+| `Ctrl+Shift+U`    | 无序列表              | `- 项目`          |
+| `Ctrl+Shift+O`    | 有序列表              | `1. 项目`         |
+| `Tab`             | 缩进（4 空格）        |                   |
+| `Shift+Tab`       | 取消缩进              |                   |
+
+## Markdown 语法速查
+
+### 标题
+
+```
+# 一级标题
+## 二级标题
+### 三级标题
+```
+
+### 强调
+
+```
+**粗体**    *斜体*    ~~删除线~~    ==高亮==
+```
+
+### 列表
+
+> **注意**：`-` 后面必须有一个空格，列表前需要空一行。
+
+```
+- 无序项目
+- 无序项目
+  - 嵌套项目（两个空格缩进）
+
+1. 有序项目
+2. 有序项目
+```
+
+### 链接与图片
+
+```
+[链接文字](https://example.com)
+![图片描述](image.png)
+```
+
+### 代码
+
+    行内代码：`code`
+
+    代码块：
+    ```python
+    print("Hello")
+    ```
+
+### 引用与分隔线
+
+```
+> 这是一段引用
+
+---
+```
+
+### 表格
+
+```
+| 列1   | 列2   |
+|-------|-------|
+| 内容  | 内容  |
+```
+
+### 上下标
+
+```
+H~2~O（下标）    x^2^（上标）
+```
+
+## 主题
+
+点击顶部工具栏的 5 个圆点按钮，或按 `Ctrl+T` 循环切换：
+
+- **默认**（浅白）— 标准 GitHub 风格
+- **护眼**（浅绿）— 减少视觉疲劳
+- **米黄**（暖黄）— 纸张感阅读
+- **暗色**（深蓝）— Tokyo Night 风格
+- **夜间**（纯黑）— 极暗背景
+
+---
+
+*版本 {VERSION} · 作者 Red*
+"""
+        body, toc = render_markdown(welcome_md)
+        self.view.setHtml(build_page(body, toc, self.theme, APP_NAME),
+                          QUrl(f'file:///{BASE_DIR}/'))
+
+    # ── 文件操作 ──────────────────────────────────────────────────────────────
+
+    def open_file_dialog(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, '打开 Markdown 文件', '',
+            'Markdown 文件 (*.md *.markdown *.mdown *.txt)'
+        )
+        if path:
+            self.load_file(path)
+
+    def load_file(self, path: str):
+        path = os.path.normpath(path)
+        if not os.path.isfile(path):
+            self.statusBar().showMessage(f'文件不存在：{path}')
+            return
+        try:
+            with open(path, encoding='utf-8') as f:
+                text = f.read()
+        except UnicodeDecodeError:
+            with open(path, encoding='gbk', errors='replace') as f:
+                text = f.read()
+
+        if self.current_file and self.current_file != path:
+            self._watcher.removePath(self.current_file)
+        if path not in self._watcher.files():
+            self._watcher.addPath(path)
+
+        self.current_file  = path
+        self._current_text = text
+        self._modified     = False
+
+        if self._edit_mode:
+            self.editor.blockSignals(True)
+            self.editor.setPlainText(text)
+            self.editor.blockSignals(False)
+
+        self._update_preview()
+        self._update_title()
+        self._add_recent(path)
+
+        size_kb = max(1, os.path.getsize(path) // 1024)
+        self.statusBar().showMessage(
+            f'{path}  |  {text.count(chr(10)) + 1} 行  |  {size_kb} KB'
+        )
+
+    def save_file(self):
+        if not self._edit_mode:
+            return
+        # 无当前文件则另存为
+        if not self.current_file:
+            path, _ = QFileDialog.getSaveFileName(
+                self, '保存文件', 'untitled.md', 'Markdown 文件 (*.md)'
+            )
+            if not path:
+                return
+            self.current_file = path
+            self._watcher.addPath(path)
+        text = self.editor.toPlainText()
+        try:
+            with open(self.current_file, 'w', encoding='utf-8') as f:
+                f.write(text)
+        except Exception as ex:
+            self.statusBar().showMessage(f'保存失败：{ex}')
+            return
+        self._current_text = text
+        self._modified     = False
+        self._update_title()
+        self.statusBar().showMessage(f'已保存：{self.current_file}')
+
+    def _reload_from_disk(self):
+        if self.current_file:
+            self.load_file(self.current_file)
+
+    def _on_file_changed(self, path: str):
+        if path == self.current_file and os.path.isfile(path) and not self._modified:
+            self.load_file(path)
+            if path not in self._watcher.files():
+                self._watcher.addPath(path)
+
+    # ── 编辑模式 ──────────────────────────────────────────────────────────────
+
+    def toggle_edit(self):
+        self.search_bar.hide_bar()
+        if not self._edit_mode:
+            self._edit_mode = True
+            self.editor.blockSignals(True)
+            self.editor.setPlainText(self._current_text)  # 无文件时为空白
+            self.editor.blockSignals(False)
+            self.editor.setVisible(True)
+            w = self.width()
+            self.splitter.setSizes([w // 2, w // 2])
+            self.editor.setFocus()
+        else:
+            self._edit_mode = False
+            self.editor.setVisible(False)
+            self.splitter.setSizes([0, self.width()])
+        self.titlebar.set_edit_active(self._edit_mode)
+
+    def _on_editor_changed(self):
+        if not self._modified:
+            self._modified = True
+            self._update_title()
+        self._preview_timer.start()
+        text  = self.editor.toPlainText()
+        chars = len(text)
+        words = len(text.split()) if text.strip() else 0
+        lines = self.editor.blockCount()
+        self.statusBar().showMessage(f'{words} 词  ·  {chars} 字符  ·  {lines} 行')
+
+    def _update_preview(self):
+        text = self.editor.toPlainText() if self._edit_mode else self._current_text
+        if not text and not self.current_file:
+            return
+        title = os.path.basename(self.current_file) if self.current_file else APP_NAME
+        body, toc = render_markdown(text)
+        if self.current_file:
+            base_url = QUrl.fromLocalFile(os.path.dirname(self.current_file) + '/')
+        else:
+            base_url = QUrl(f'file:///{BASE_DIR}/')
+        self.view.setHtml(build_page(body, toc, self.theme, title), base_url)
+
+    def _update_title(self):
+        if self.current_file:
+            name   = os.path.basename(self.current_file)
+            prefix = '* ' if self._modified else ''
+            self.setWindowTitle(f'{prefix}{name} — {APP_NAME}')
+            self.titlebar.lbl_title.setText(f'{prefix}{name}')
+
+    # ── 导出 PDF ──────────────────────────────────────────────────────────────
+
+    def export_pdf(self):
+        if not self.current_file:
+            self.statusBar().showMessage('请先打开一个文件')
+            return
+        default = os.path.splitext(self.current_file)[0] + '.pdf'
+        save_path, _ = QFileDialog.getSaveFileName(self, '导出 PDF', default, 'PDF 文件 (*.pdf)')
+        if save_path:
+            self.view.page().printToPdf(save_path)
+            self.statusBar().showMessage(f'已导出：{save_path}')
+
+    # ── 主题 ──────────────────────────────────────────────────────────────────
+
+    def _cycle_theme(self):
+        idx = (THEMES.index(self.theme) + 1) % len(THEMES)
+        self.set_theme(THEMES[idx])
+
+    def set_theme(self, theme: str):
+        if theme == self.theme:
+            return
+        self.theme = theme
+        self.titlebar.apply_theme(theme)
+        self.titlebar.set_edit_active(self._edit_mode)
+        self.search_bar.apply_theme(theme)
+        self.editor.apply_theme(theme)
+        if self.current_file or self._edit_mode:
+            self._update_preview()
+        else:
+            self._show_welcome()
+
+    # ── 拖拽 ──────────────────────────────────────────────────────────────────
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        if event.mimeData().hasUrls():
+            for u in event.mimeData().urls():
+                if u.toLocalFile().lower().endswith(('.md', '.markdown', '.mdown', '.txt')):
+                    event.acceptProposedAction()
+                    return
+
+    def dropEvent(self, event: QDropEvent):
+        for u in event.mimeData().urls():
+            path = u.toLocalFile()
+            if path.lower().endswith(('.md', '.markdown', '.mdown', '.txt')):
+                self.load_file(path)
+                break
+
+
+# ── 入口 ──────────────────────────────────────────────────────────────────────
+
+def main():
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('Red.TypeRed.Reader')
+    except Exception:
+        pass
+
+    app = QApplication(sys.argv)
+    app.setApplicationName(APP_NAME)
+    app.setApplicationVersion(VERSION)
+
+    icon = make_app_icon()
+    app.setWindowIcon(icon)
+
+    win = TypeRedWindow(icon)
+    win.show()
+
+    if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
+        win.load_file(sys.argv[1])
+
+    sys.exit(app.exec())
+
+
+if __name__ == '__main__':
+    main()

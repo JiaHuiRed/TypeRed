@@ -1,0 +1,335 @@
+/* author Red */
+/* MK — Markdown Reader 样式 v0.3.0 */
+/* #260518 Red 0.1.0 新增护眼/米黄/夜间主题 */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ── 根变量 ── */
+html.light {
+  --bg:          #ffffff;
+  --bg-sidebar:  #f6f6f7;
+  --text:        #1a1a1a;
+  --text-muted:  #666;
+  --link:        #0969da;
+  --border:      #e1e4e8;
+  --code-bg:     #f0f2f4;
+  --code-text:   #24292f;
+  --blockquote:  #6a737d;
+  --bq-border:   #d0d7de;
+  --th-bg:       #f0f2f4;
+  --scrollbar:   #ccc;
+}
+
+html.dark {
+  --bg:          #1a1b26;
+  --bg-sidebar:  #16171f;
+  --text:        #c0caf5;
+  --text-muted:  #787c99;
+  --link:        #7aa2f7;
+  --border:      #2a2b3d;
+  --code-bg:     #1e1f2e;
+  --code-text:   #c0caf5;
+  --blockquote:  #787c99;
+  --bq-border:   #3b3d57;
+  --th-bg:       #1e1f2e;
+  --scrollbar:   #3b3d57;
+}
+
+/* 护眼绿 */
+html.eye-care {
+  --bg:          #f0f7f0;
+  --bg-sidebar:  #e4f0e4;
+  --text:        #1a2e1a;
+  --text-muted:  #4a6e4a;
+  --link:        #2d7a3d;
+  --border:      #bcd8bc;
+  --code-bg:     #deeede;
+  --code-text:   #1a2e1a;
+  --blockquote:  #4a6e4a;
+  --bq-border:   #9cc49c;
+  --th-bg:       #d8ead8;
+  --scrollbar:   #9cc49c;
+}
+
+/* 米黄 */
+html.cream {
+  --bg:          #fdf6e3;
+  --bg-sidebar:  #f5ead0;
+  --text:        #2c1f0a;
+  --text-muted:  #7a5e28;
+  --link:        #b35900;
+  --border:      #e0c898;
+  --code-bg:     #ede4c8;
+  --code-text:   #2c1f0a;
+  --blockquote:  #7a5e28;
+  --bq-border:   #c8a060;
+  --th-bg:       #e8d8b0;
+  --scrollbar:   #c8a060;
+}
+
+/* 夜间（深黑） */
+html.night {
+  --bg:          #0a0a0a;
+  --bg-sidebar:  #111111;
+  --text:        #cccccc;
+  --text-muted:  #666666;
+  --link:        #6aabff;
+  --border:      #222222;
+  --code-bg:     #141414;
+  --code-text:   #cccccc;
+  --blockquote:  #666666;
+  --bq-border:   #333333;
+  --th-bg:       #161616;
+  --scrollbar:   #333333;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: 15px;
+  line-height: 1.75;
+}
+
+/* ── 布局 ── */
+#layout {
+  display: flex;
+  min-height: 100%;
+}
+
+/* ── TOC 侧边栏 ── */
+#toc {
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  width: 220px;
+  min-width: 200px;
+  max-height: 100vh;
+  overflow-y: auto;
+  padding: 24px 16px 24px 20px;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  font-size: 13px;
+  line-height: 1.6;
+  flex-shrink: 0;
+}
+
+#toc::before {
+  content: '目录';
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
+#toc ul {
+  list-style: none;
+  padding-left: 10px;
+}
+
+#toc > ul { padding-left: 0; }
+
+#toc li { margin: 3px 0; }
+
+#toc a {
+  color: var(--text-muted);
+  text-decoration: none;
+  display: block;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#toc a:hover {
+  color: var(--link);
+  background: var(--code-bg);
+}
+
+/* ── 正文 ── */
+#content {
+  flex: 1;
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 40px 48px 80px;
+}
+
+/* ── 标题 ── */
+#content h1, #content h2, #content h3,
+#content h4, #content h5, #content h6 {
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 1.5em 0 0.6em;
+  color: var(--text);
+}
+
+#content h1 { font-size: 2em;   border-bottom: 2px solid var(--border); padding-bottom: 0.3em; }
+#content h2 { font-size: 1.5em; border-bottom: 1px solid var(--border); padding-bottom: 0.25em; }
+#content h3 { font-size: 1.25em; }
+#content h4 { font-size: 1.1em; }
+#content h5, #content h6 { font-size: 1em; color: var(--text-muted); }
+
+/* 标题锚点 */
+#content .headerlink {
+  opacity: 0;
+  margin-left: 6px;
+  font-size: 0.8em;
+  color: var(--link);
+  text-decoration: none;
+  transition: opacity 0.15s;
+}
+#content h1:hover .headerlink,
+#content h2:hover .headerlink,
+#content h3:hover .headerlink,
+#content h4:hover .headerlink { opacity: 1; }
+
+/* ── 段落/链接 ── */
+#content p  { margin: 0.8em 0; }
+#content a  { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
+#content a:hover { opacity: 0.8; }
+
+/* ── 强调 ── */
+#content strong { font-weight: 600; }
+#content em     { font-style: italic; }
+
+/* ── 列表 ── */
+#content ul, #content ol {
+  margin: 0.6em 0;
+  padding-left: 1.8em;
+}
+#content li { margin: 0.25em 0; }
+#content li > ul, #content li > ol { margin: 0.2em 0; }
+
+/* 任务列表 */
+#content input[type="checkbox"] {
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+/* ── 引用块 ── */
+#content blockquote {
+  margin: 1em 0;
+  padding: 0.6em 1em;
+  border-left: 4px solid var(--bq-border);
+  color: var(--blockquote);
+  background: var(--code-bg);
+  border-radius: 0 6px 6px 0;
+}
+#content blockquote p { margin: 0; }
+
+/* ── 分隔线 ── */
+#content hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2em 0;
+}
+
+/* ── 行内代码 ── */
+#content code {
+  font-family: 'Cascadia Code', 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+  font-size: 0.875em;
+  background: var(--code-bg);
+  color: var(--code-text);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+
+/* ── 代码块 ── */
+#content .codehilite {
+  margin: 1em 0;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  font-size: 0.875em;
+}
+
+#content .codehilite pre {
+  margin: 0;
+  padding: 16px 18px;
+  overflow-x: auto;
+  font-family: 'Cascadia Code', 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+  line-height: 1.6;
+}
+
+/* 代码块内的 code 不再加内边距/边框 */
+#content .codehilite code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-size: 1em;
+}
+
+/* ── 表格 ── */
+#content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1em 0;
+  font-size: 0.92em;
+}
+#content th, #content td {
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+#content th {
+  background: var(--th-bg);
+  font-weight: 600;
+}
+#content tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--bg-sidebar) 60%, transparent);
+}
+
+/* ── 图片 ── */
+#content img {
+  max-width: 100%;
+  border-radius: 6px;
+  margin: 0.5em 0;
+}
+
+/* ── 脚注 ── */
+#content .footnote {
+  font-size: 0.85em;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+  margin-top: 2em;
+  padding-top: 1em;
+}
+
+/* ── 高亮 / 上下标 ── */
+#content mark {
+  background: #ffe066;
+  color: #1a1a1a;
+  border-radius: 2px;
+  padding: 0 2px;
+}
+html.dark #content mark,
+html.night #content mark {
+  background: #7a6a00;
+  color: #fffde0;
+}
+html.eye-care #content mark { background: #c8f0a0; color: #1a2e1a; }
+html.cream    #content mark { background: #f5d080; color: #2c1f0a; }
+
+#content sup, #content sub {
+  font-size: 0.78em;
+  line-height: 0;
+}
+
+/* ── 分隔线 ── */
+/* ── 滚动条 ── */
+::-webkit-scrollbar       { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--link); }
+
+/* ── 无 TOC 时正文居中 ── */
+#layout:not(:has(#toc)) #content {
+  padding-left: 48px;
+}
