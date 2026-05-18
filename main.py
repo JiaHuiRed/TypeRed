@@ -23,12 +23,12 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEnginePage
 from PySide6.QtCore import (
     Qt, QUrl, QPointF, QRectF, QEvent, QObject,
-    QFileSystemWatcher, QSettings, QSize, QPoint, QTimer
+    QFileSystemWatcher, QSettings, QSize, QPoint, QTimer,
 )
 from PySide6.QtGui import (
     QIcon, QDragEnterEvent, QDropEvent, QKeySequence, QShortcut,
     QPainter, QColor, QPixmap, QFont, QPainterPath, QLinearGradient,
-    QMouseEvent, QAction, QTextCursor
+    QMouseEvent, QAction, QTextCursor, QRegion
 )
 from PySide6.QtPrintSupport import QPrinter
 
@@ -625,24 +625,120 @@ class SearchBar(QWidget):
             super().keyPressEvent(e)
 
 
+# ── 边缘缩放覆盖层（纯 Qt，不依赖 Windows API） ──────────────────────────────
+
+class _EdgeOverlay(QWidget):
+    """透明覆盖层，`setMask` 只在窗口边缘 8px 接收鼠标事件，
+       中间区域事件穿透到子部件。处理边缘拖拽缩放。"""
+    _MARGIN    = 8
+    _MIN_W     = 640
+    _MIN_H     = 420
+    _CURSORS   = {
+        'tl': Qt.SizeFDiagCursor, 'tr': Qt.SizeBDiagCursor,
+        'bl': Qt.SizeBDiagCursor, 'br': Qt.SizeFDiagCursor,
+        'l': Qt.SizeHorCursor,    'r': Qt.SizeHorCursor,
+        't': Qt.SizeVerCursor,    'b': Qt.SizeVerCursor,
+    }
+
+    def __init__(self, parent, window):
+        super().__init__(parent)
+        self._window    = window
+        self._resizing  = False
+        self._edge      = None
+        self._start_pos = None
+        self._start_geo = None
+        self.setMouseTracking(True)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+
+    def _update_mask(self):
+        w, h = self.width(), self.height()
+        m = self._MARGIN
+        full  = QRegion(0, 0, w, h)
+        inner = QRegion(m, m, w - 2*m, h - 2*m)
+        self.setMask(full.subtracted(inner))
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._update_mask()
+
+    def _edge_at(self, pos):
+        w, h = self.width(), self.height()
+        m = self._MARGIN
+        x, y = int(pos.x()), int(pos.y())
+        on_l = x <= m; on_r = x >= w - m - 1
+        on_t = y <= m; on_b = y >= h - m - 1
+        if on_t and on_l: return 'tl'
+        if on_t and on_r: return 'tr'
+        if on_b and on_l: return 'bl'
+        if on_b and on_r: return 'br'
+        if on_l: return 'l'
+        if on_r: return 'r'
+        if on_t: return 't'
+        if on_b: return 'b'
+        return None
+
+    def mouseMoveEvent(self, e):
+        if self._resizing and self._edge:
+            dx = e.globalPosition().x() - self._start_pos.x()
+            dy = e.globalPosition().y() - self._start_pos.y()
+            rx, ry, rw, rh = self._start_geo
+            edge = self._edge
+            if 'l' in edge: rx += dx; rw -= dx
+            if 'r' in edge: rw += dx
+            if 't' in edge: ry += dy; rh -= dy
+            if 'b' in edge: rh += dy
+            if rw < self._MIN_W:
+                if 'l' in edge: rx -= (self._MIN_W - rw)
+                rw = self._MIN_W
+            if rh < self._MIN_H:
+                if 't' in edge: ry -= (self._MIN_H - rh)
+                rh = self._MIN_H
+            self._window.setGeometry(int(rx), int(ry), int(rw), int(rh))
+            return
+        edge = self._edge_at(e.position())
+        self.setCursor(self._CURSORS.get(edge, Qt.ArrowCursor))
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            edge = self._edge_at(e.position())
+            if edge:
+                self._resizing  = True
+                self._edge      = edge
+                self._start_pos = e.globalPosition().toPoint()
+                self._start_geo = (self._window.x(), self._window.y(),
+                                   self._window.width(), self._window.height())
+                return
+        super().mousePressEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        if self._resizing:
+            self._resizing  = False
+            self._edge      = None
+            self._start_pos = None
+            self._start_geo = None
+            return
+        super().mouseReleaseEvent(e)
+
+
 # ── 主窗口 ────────────────────────────────────────────────────────────────────
 
 class TypeRedWindow(QMainWindow):
     def __init__(self, app_icon: QIcon):
         super().__init__()
-        self.theme         = 'light'
-        self.current_file  = ''
-        self._current_text = ''
-        self._modified     = False
-        self._edit_mode    = False
-        self._app_icon     = app_icon
-        self._settings     = QSettings('Red', APP_NAME)
-        self._watcher      = QFileSystemWatcher(self)
+        self.theme            = 'light'
+        self.current_file     = ''
+        self._current_text    = ''
+        self._modified        = False
+        self._edit_mode       = False
+        self._app_icon        = app_icon
+        self._settings        = QSettings('Red', APP_NAME)
+        self._watcher         = QFileSystemWatcher(self)
         self._watcher.fileChanged.connect(self._on_file_changed)
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
         self._preview_timer.setInterval(400)
         self._preview_timer.timeout.connect(self._update_preview)
+
         self._build_ui()
         self._restore_state()
         self.setAcceptDrops(True)
@@ -691,20 +787,22 @@ class TypeRedWindow(QMainWindow):
         layout.addWidget(self.search_bar)
         self.setCentralWidget(central)
 
+        # 边缘缩放覆盖层（透明，只捕获边缘 8px）
+        self._edge_overlay = _EdgeOverlay(central, self)
+        self._edge_overlay.setGeometry(central.rect())
+        self._edge_overlay.show()
+        self._edge_overlay.raise_()
+
         self._register_shortcuts()
         self._show_welcome()
 
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        if hasattr(self, '_edge_overlay'):
+            self._edge_overlay.setGeometry(self.centralWidget().rect())
+
     def showEvent(self, e):
         super().showEvent(e)
-        try:
-            GWL_STYLE      = -16
-            WS_MINIMIZEBOX = 0x00020000
-            WS_MAXIMIZEBOX = 0x00010000
-            hwnd  = int(self.winId())
-            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_STYLE)
-            ctypes.windll.user32.SetWindowLongW(hwnd, GWL_STYLE, style | WS_MINIMIZEBOX | WS_MAXIMIZEBOX)
-        except Exception:
-            pass
         from PySide6.QtWidgets import QWidget as _QW
         for child in self.view.findChildren(_QW):
             child.setAcceptDrops(False)
