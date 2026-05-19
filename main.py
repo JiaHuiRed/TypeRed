@@ -801,8 +801,9 @@ class _EdgeOverlay(QWidget):
 # ── 主窗口 ────────────────────────────────────────────────────────────────────
 
 class TypeRedWindow(QMainWindow):
-    def __init__(self, app_icon: QIcon):
+    def __init__(self, app_icon: QIcon, initial_file: str = ''):
         super().__init__()
+        self._initial_file    = initial_file
         self.theme            = 'light'
         self.current_file     = ''
         self._current_text    = ''
@@ -872,7 +873,10 @@ class TypeRedWindow(QMainWindow):
         self._edge_overlay.raise_()
 
         self._register_shortcuts()
-        QTimer.singleShot(0, self._show_welcome)
+        if self._initial_file:
+            QTimer.singleShot(0, lambda: self.load_file(self._initial_file))
+        else:
+            QTimer.singleShot(0, self._show_welcome)
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
@@ -914,7 +918,7 @@ class TypeRedWindow(QMainWindow):
             self.resize(size)
 
         last = self._settings.value('last_file', '')
-        if last and os.path.isfile(last):
+        if not self._initial_file and last and os.path.isfile(last):
             QTimer.singleShot(50, lambda: self.load_file(last))
 
     def _save_state(self):
@@ -1322,11 +1326,9 @@ def main():
     icon = make_app_icon()
     app.setWindowIcon(icon)
 
-    win = TypeRedWindow(icon)
+    initial_file = sys.argv[1] if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]) else ''
+    win = TypeRedWindow(icon, initial_file)
     win.show()
-
-    if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
-        win.load_file(sys.argv[1])
 
     sys.exit(app.exec())
 
