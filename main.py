@@ -804,6 +804,16 @@ class TypeRedWindow(QMainWindow):
 
     def showEvent(self, e):
         super().showEvent(e)
+        # 若任务栏点击无法最小化/还原，取消下方注释（Win11 无边框窗口可能需要）
+        # try:
+        #     GWL_STYLE      = -16
+        #     WS_MINIMIZEBOX = 0x00020000
+        #     WS_MAXIMIZEBOX = 0x00010000
+        #     hwnd  = int(self.winId())
+        #     style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_STYLE)
+        #     ctypes.windll.user32.SetWindowLongW(hwnd, GWL_STYLE, style | WS_MINIMIZEBOX | WS_MAXIMIZEBOX)
+        # except Exception:
+        #     pass
         from PySide6.QtWidgets import QWidget as _QW
         for child in self.view.findChildren(_QW):
             child.setAcceptDrops(False)
