@@ -1,11 +1,15 @@
 # author Red
-# TypeRed — Markdown Reader & Editor v0.4.1
+# TypeRed — Markdown Reader & Editor v0.4.3
 #//#260518 Red 0.3.0 编辑模式/实时预览/Markdown格式快捷键/上下标高亮渲染
 #//#260518 Red 0.3.1 欢迎页详细化/修复代码围栏嵌套渲染/README补全快捷键
 #//#260518 Red 0.3.2 pygments_css缓存/字数统计/编辑模式Ctrl+F指向编辑区
 #//#260519 Red 0.3.3 纯Qt边缘缩放覆盖层/修复Win11无边框窗口无法调整大小
 #//#260519 Red 0.4.0 查找替换(Ctrl+H)/图片拖入自动插入语法/插入表格对话框(Ctrl+Shift+T)
 #//#260519 Red 0.4.1 修复通过右键"打开方式"启动时显示欢迎页而非目标文件
+#//#260519 Red 0.4.2 修复含BOM的UTF-8文件首行标题无法渲染
+#//#260519 Red 0.4.3 任务栏图标支持最小化/还原切换/绿灯最大化还原
+#//#260519 Red 0.4.4 修复绿灯还原不回正确尺寸/任务栏SWP_FRAMECHANGED生效
+#//#260519 Red 0.4.5 修复关闭时保存最大化尺寸导致下次启动过大/默认窗口尺寸缩小
 
 import sys
 import os
@@ -36,7 +40,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtPrintSupport import QPrinter
 
-VERSION  = "0.4.1"
+VERSION  = "0.4.5"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 MAX_RECENT = 10
@@ -369,9 +373,7 @@ class TrafficLights(QWidget):
             layout.addWidget(btn)
         btns[0].clicked.connect(win.close)
         btns[1].clicked.connect(win.showMinimized)
-        btns[2].clicked.connect(
-            lambda: win.showNormal() if win.isMaximized() else win.showMaximized()
-        )
+        btns[2].clicked.connect(win._toggle_maximize)
 
 
 # ── 主题圆点 ──────────────────────────────────────────────────────────────────
@@ -805,6 +807,7 @@ class TypeRedWindow(QMainWindow):
     def __init__(self, app_icon: QIcon, initial_file: str = ''):
         super().__init__()
         self._initial_file    = initial_file
+        self._pre_max_geo     = None          # 最大化前保存的窗口尺寸
         self.theme            = 'light'
         self.current_file     = ''
         self._current_text    = ''
@@ -827,7 +830,7 @@ class TypeRedWindow(QMainWindow):
 
     def _build_ui(self):
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
-        self.resize(1100, 780)
+        self.resize(900, 640)
         self.setMinimumSize(640, 420)
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(self._app_icon)
@@ -879,6 +882,15 @@ class TypeRedWindow(QMainWindow):
         else:
             QTimer.singleShot(0, self._show_welcome)
 
+    def _toggle_maximize(self):
+        if self.isMaximized():
+            self.showNormal()
+            if self._pre_max_geo is not None:
+                self.setGeometry(self._pre_max_geo)
+        else:
+            self._pre_max_geo = self.geometry()
+            self.showMaximized()
+
     def resizeEvent(self, e):
         super().resizeEvent(e)
         if hasattr(self, '_edge_overlay'):
@@ -886,16 +898,23 @@ class TypeRedWindow(QMainWindow):
 
     def showEvent(self, e):
         super().showEvent(e)
-        # 若任务栏点击无法最小化/还原，取消下方注释（Win11 无边框窗口可能需要）
-        # try:
-        #     GWL_STYLE      = -16
-        #     WS_MINIMIZEBOX = 0x00020000
-        #     WS_MAXIMIZEBOX = 0x00010000
-        #     hwnd  = int(self.winId())
-        #     style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_STYLE)
-        #     ctypes.windll.user32.SetWindowLongW(hwnd, GWL_STYLE, style | WS_MINIMIZEBOX | WS_MAXIMIZEBOX)
-        # except Exception:
-        #     pass
+        # 为无边框窗口加 WS_MINIMIZEBOX，使任务栏图标支持点击最小化/还原切换
+        try:
+            GWL_STYLE        = -16
+            WS_MINIMIZEBOX   = 0x00020000
+            SWP_FRAMECHANGED = 0x0020
+            SWP_NOMOVE       = 0x0002
+            SWP_NOSIZE       = 0x0001
+            SWP_NOZORDER     = 0x0004
+            hwnd  = int(self.winId())
+            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_STYLE)
+            ctypes.windll.user32.SetWindowLongW(hwnd, GWL_STYLE, style | WS_MINIMIZEBOX)
+            ctypes.windll.user32.SetWindowPos(
+                hwnd, None, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED
+            )
+        except Exception:
+            pass
         from PySide6.QtWidgets import QWidget as _QW
         for child in self.view.findChildren(_QW):
             child.setAcceptDrops(False)
@@ -916,7 +935,9 @@ class TypeRedWindow(QMainWindow):
         if isinstance(pos, QPoint):
             self.move(pos)
         if isinstance(size, QSize):
-            self.resize(size)
+            screen = QApplication.primaryScreen().availableSize()
+            if size.width() < screen.width() * 0.9 and size.height() < screen.height() * 0.9:
+                self.resize(size)
 
         last = self._settings.value('last_file', '')
         if not self._initial_file and last and os.path.isfile(last):
@@ -924,8 +945,13 @@ class TypeRedWindow(QMainWindow):
 
     def _save_state(self):
         self._settings.setValue('theme',     self.theme)
-        self._settings.setValue('pos',       self.pos())
-        self._settings.setValue('size',      self.size())
+        # 最大化时保存最大化前的尺寸，避免下次启动以全屏大小打开
+        if self.isMaximized() and self._pre_max_geo is not None:
+            self._settings.setValue('pos',  self._pre_max_geo.topLeft())
+            self._settings.setValue('size', self._pre_max_geo.size())
+        else:
+            self._settings.setValue('pos',  self.pos())
+            self._settings.setValue('size', self.size())
         self._settings.setValue('last_file', self.current_file)
 
     def closeEvent(self, e):
@@ -1152,7 +1178,7 @@ H~2~O（下标）    x^2^（上标）
             self.statusBar().showMessage(f'文件不存在：{path}')
             return
         try:
-            with open(path, encoding='utf-8') as f:
+            with open(path, encoding='utf-8-sig') as f:
                 text = f.read()
         except UnicodeDecodeError:
             with open(path, encoding='gbk', errors='replace') as f:
