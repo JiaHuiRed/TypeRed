@@ -1,10 +1,11 @@
 # author Red
-# TypeRed — Markdown Reader & Editor v0.4.0
+# TypeRed — Markdown Reader & Editor v0.4.1
 #//#260518 Red 0.3.0 编辑模式/实时预览/Markdown格式快捷键/上下标高亮渲染
 #//#260518 Red 0.3.1 欢迎页详细化/修复代码围栏嵌套渲染/README补全快捷键
 #//#260518 Red 0.3.2 pygments_css缓存/字数统计/编辑模式Ctrl+F指向编辑区
 #//#260519 Red 0.3.3 纯Qt边缘缩放覆盖层/修复Win11无边框窗口无法调整大小
 #//#260519 Red 0.4.0 查找替换(Ctrl+H)/图片拖入自动插入语法/插入表格对话框(Ctrl+Shift+T)
+#//#260519 Red 0.4.1 修复通过右键"打开方式"启动时显示欢迎页而非目标文件
 
 import sys
 import os
@@ -35,7 +36,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtPrintSupport import QPrinter
 
-VERSION  = "0.4.0"
+VERSION  = "0.4.1"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 MAX_RECENT = 10
