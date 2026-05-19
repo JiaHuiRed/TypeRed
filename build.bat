@@ -9,7 +9,7 @@ if errorlevel 1 (
 )
 
 echo [2/2] Building exe...
-pyinstaller --onefile --windowed --name TypeRed --icon TypeRed.ico --add-data "frontend/style.css;frontend" --noupx main.py
+pyinstaller --onefile --windowed --name TypeRed --icon TypeRed.ico --add-data "frontend/style.css;frontend" --noupx --clean main.py
 if errorlevel 1 (
     echo Build failed.
     pause

@@ -1,9 +1,10 @@
 # author Red
-# TypeRed — Markdown Reader & Editor v0.3.3
+# TypeRed — Markdown Reader & Editor v0.4.0
 #//#260518 Red 0.3.0 编辑模式/实时预览/Markdown格式快捷键/上下标高亮渲染
 #//#260518 Red 0.3.1 欢迎页详细化/修复代码围栏嵌套渲染/README补全快捷键
 #//#260518 Red 0.3.2 pygments_css缓存/字数统计/编辑模式Ctrl+F指向编辑区
 #//#260519 Red 0.3.3 纯Qt边缘缩放覆盖层/修复Win11无边框窗口无法调整大小
+#//#260519 Red 0.4.0 查找替换(Ctrl+H)/图片拖入自动插入语法/插入表格对话框(Ctrl+Shift+T)
 
 import sys
 import os
@@ -18,7 +19,8 @@ from pygments.formatters import HtmlFormatter
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QFileDialog, QLabel, QPushButton, QSizeGrip, QMenu,
-    QPlainTextEdit, QSplitter
+    QPlainTextEdit, QSplitter,
+    QDialog, QSpinBox, QFormLayout, QDialogButtonBox,
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEnginePage
@@ -33,7 +35,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtPrintSupport import QPrinter
 
-VERSION  = "0.3.3"
+VERSION  = "0.4.0"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 MAX_RECENT = 10
@@ -198,6 +200,7 @@ class DragFilter(QObject):
 
 class Editor(QPlainTextEdit):
     """带 Markdown 格式快捷键的纯文本编辑器。"""
+    _IMG_EXTS = ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.ico', '.tiff')
 
     def __init__(self, on_change):
         super().__init__()
@@ -306,6 +309,25 @@ class Editor(QPlainTextEdit):
             self._toggle_list(True)
             return
         super().keyPressEvent(e)
+
+    # ── 图片拖入 ──────────────────────────────────────────────────────────────
+
+    def dragEnterEvent(self, e):
+        if e.mimeData().hasUrls():
+            for u in e.mimeData().urls():
+                if u.toLocalFile().lower().endswith(self._IMG_EXTS):
+                    e.acceptProposedAction()
+                    return
+        super().dragEnterEvent(e)
+
+    def dropEvent(self, e):
+        for u in e.mimeData().urls():
+            path = u.toLocalFile()
+            if path.lower().endswith(self._IMG_EXTS):
+                self.insertPlainText(f'![]({path.replace(chr(92), "/")})')
+                e.acceptProposedAction()
+                return
+        super().dropEvent(e)
 
     def apply_theme(self, theme: str):
         bg, fg = THEME_EDITOR[theme]
@@ -526,38 +548,64 @@ class TitleBar(QWidget):
             self._win.showMaximized()
 
 
-# ── 搜索栏 ────────────────────────────────────────────────────────────────────
+# ── 搜索/替换栏 ───────────────────────────────────────────────────────────────
 
 class SearchBar(QWidget):
     def __init__(self, view: QWebEngineView, win: 'TypeRedWindow'):
         super().__init__(win)
         self._view   = view
-        self._editor = None   # 非 None 时搜索编辑区
+        self._win    = win
+        self._editor = None
         self.setVisible(False)
 
         from PySide6.QtWidgets import QLineEdit
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(6)
+        vbox = QVBoxLayout(self)
+        vbox.setContentsMargins(8, 4, 8, 4)
+        vbox.setSpacing(3)
 
+        # 搜索行
+        row1 = QWidget()
+        h1 = QHBoxLayout(row1)
+        h1.setContentsMargins(0, 0, 0, 0)
+        h1.setSpacing(6)
         self.input = QLineEdit()
         self.input.setPlaceholderText('搜索…')
         self.input.setFixedHeight(26)
         self.input.textChanged.connect(self._search)
         self.input.returnPressed.connect(self._next)
-        layout.addWidget(self.input)
-
+        h1.addWidget(self.input)
         for label, fn in [('↑', self._prev), ('↓', self._next), ('✕', self.hide_bar)]:
             btn = QPushButton(label)
             btn.setFixedSize(26, 26)
             btn.clicked.connect(fn)
-            layout.addWidget(btn)
+            h1.addWidget(btn)
+        vbox.addWidget(row1)
+
+        # 替换行（仅编辑模式下展示）
+        self._replace_row = QWidget()
+        h2 = QHBoxLayout(self._replace_row)
+        h2.setContentsMargins(0, 0, 0, 0)
+        h2.setSpacing(6)
+        self.replace_input = QLineEdit()
+        self.replace_input.setPlaceholderText('替换为…')
+        self.replace_input.setFixedHeight(26)
+        h2.addWidget(self.replace_input)
+        btn_rep = QPushButton('替换')
+        btn_rep.setFixedHeight(26)
+        btn_rep.clicked.connect(self._replace_one)
+        h2.addWidget(btn_rep)
+        btn_rep_all = QPushButton('全部替换')
+        btn_rep_all.setFixedHeight(26)
+        btn_rep_all.clicked.connect(self._replace_all)
+        h2.addWidget(btn_rep_all)
+        self._replace_row.setVisible(False)
+        vbox.addWidget(self._replace_row)
 
     def set_target(self, editor=None):
-        """切换搜索目标：editor=None 时搜预览区，否则搜编辑区。"""
         self._editor = editor
 
-    def show_bar(self):
+    def show_bar(self, replace_mode: bool = False):
+        self._replace_row.setVisible(replace_mode and self._editor is not None)
         self.setVisible(True)
         self.input.setFocus()
         self.input.selectAll()
@@ -594,6 +642,34 @@ class SearchBar(QWidget):
         else:
             self._view.findText(text, QWebEnginePage.FindFlag.FindBackward)
 
+    def _replace_one(self):
+        if not self._editor:
+            return
+        find_text    = self.input.text()
+        replace_text = self.replace_input.text()
+        cur = self._editor.textCursor()
+        if cur.hasSelection() and cur.selectedText() == find_text:
+            cur.insertText(replace_text)
+        self._editor.find(find_text)
+
+    def _replace_all(self):
+        if not self._editor or not self.input.text():
+            return
+        find_text    = self.input.text()
+        replace_text = self.replace_input.text()
+        text  = self._editor.toPlainText()
+        count = text.count(find_text)
+        if count == 0:
+            self._win.statusBar().showMessage('未找到匹配项')
+            return
+        cur_pos  = self._editor.textCursor().position()
+        new_text = text.replace(find_text, replace_text)
+        self._editor.setPlainText(new_text)
+        cur = self._editor.textCursor()
+        cur.setPosition(min(cur_pos, len(new_text)))
+        self._editor.setTextCursor(cur)
+        self._win.statusBar().showMessage(f'已替换 {count} 处')
+
     def apply_theme(self, theme: str):
         bg, fg, border, btn_border, _ = THEME_TB[theme]
         self.setStyleSheet(f"""
@@ -615,6 +691,7 @@ class SearchBar(QWidget):
                 border: 1px solid {btn_border};
                 border-radius: 4px;
                 font-size: 12px;
+                padding: 0 8px;
             }}
             QPushButton:hover {{ background: rgba(128,128,128,0.15); }}
         """)
@@ -795,7 +872,7 @@ class TypeRedWindow(QMainWindow):
         self._edge_overlay.raise_()
 
         self._register_shortcuts()
-        self._show_welcome()
+        QTimer.singleShot(0, self._show_welcome)
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
@@ -838,7 +915,7 @@ class TypeRedWindow(QMainWindow):
 
         last = self._settings.value('last_file', '')
         if last and os.path.isfile(last):
-            self.load_file(last)
+            QTimer.singleShot(50, lambda: self.load_file(last))
 
     def _save_state(self):
         self._settings.setValue('theme',     self.theme)
@@ -868,21 +945,56 @@ class TypeRedWindow(QMainWindow):
     # ── 快捷键 ────────────────────────────────────────────────────────────────
 
     def _register_shortcuts(self):
-        QShortcut(QKeySequence('Ctrl+O'), self).activated.connect(self.open_file_dialog)
-        QShortcut(QKeySequence('Ctrl+T'), self).activated.connect(self._cycle_theme)
-        QShortcut(QKeySequence('Ctrl+F'), self).activated.connect(self._toggle_search)
-        QShortcut(QKeySequence('Ctrl+P'), self).activated.connect(self.export_pdf)
-        QShortcut(QKeySequence('Ctrl+R'), self).activated.connect(self._reload_from_disk)
-        QShortcut(QKeySequence('Ctrl+E'), self).activated.connect(self.toggle_edit)
-        QShortcut(QKeySequence('Ctrl+S'), self).activated.connect(self.save_file)
-        QShortcut(QKeySequence('Escape'), self).activated.connect(self.search_bar.hide_bar)
+        QShortcut(QKeySequence('Ctrl+O'),       self).activated.connect(self.open_file_dialog)
+        QShortcut(QKeySequence('Ctrl+T'),       self).activated.connect(self._cycle_theme)
+        QShortcut(QKeySequence('Ctrl+F'),       self).activated.connect(self._toggle_search)
+        QShortcut(QKeySequence('Ctrl+H'),       self).activated.connect(self._toggle_replace)
+        QShortcut(QKeySequence('Ctrl+P'),       self).activated.connect(self.export_pdf)
+        QShortcut(QKeySequence('Ctrl+R'),       self).activated.connect(self._reload_from_disk)
+        QShortcut(QKeySequence('Ctrl+E'),       self).activated.connect(self.toggle_edit)
+        QShortcut(QKeySequence('Ctrl+S'),       self).activated.connect(self.save_file)
+        QShortcut(QKeySequence('Ctrl+Shift+T'), self).activated.connect(self._insert_table_dialog)
+        QShortcut(QKeySequence('Escape'),       self).activated.connect(self.search_bar.hide_bar)
 
     def _toggle_search(self):
         if self._edit_mode:
             self.search_bar.set_target(self.editor)
         else:
             self.search_bar.set_target(None)
-        self.search_bar.show_bar()
+        self.search_bar.show_bar(replace_mode=False)
+
+    def _toggle_replace(self):
+        if not self._edit_mode:
+            return
+        self.search_bar.set_target(self.editor)
+        self.search_bar.show_bar(replace_mode=True)
+
+    def _insert_table_dialog(self):
+        if not self._edit_mode:
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle('插入表格')
+        dlg.setFixedWidth(260)
+        form = QFormLayout(dlg)
+        form.setContentsMargins(16, 16, 16, 12)
+        form.setSpacing(10)
+        rows_spin = QSpinBox(); rows_spin.setRange(1, 30); rows_spin.setValue(3)
+        cols_spin = QSpinBox(); cols_spin.setRange(1, 15); cols_spin.setValue(3)
+        form.addRow('行数（含标题行）', rows_spin)
+        form.addRow('列数', cols_spin)
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        form.addRow(btns)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        rows = rows_spin.value()
+        cols = cols_spin.value()
+        header    = '| ' + ' | '.join(f'列{i+1}' for i in range(cols)) + ' |'
+        separator = '| ' + ' | '.join('---' for _ in range(cols)) + ' |'
+        body_rows = ['| ' + ' | '.join('   ' for _ in range(cols)) + ' |'] * max(0, rows - 1)
+        table = '\n'.join([header, separator] + body_rows)
+        self.editor.insertPlainText('\n' + table + '\n')
 
     # ── 欢迎页 ────────────────────────────────────────────────────────────────
 
@@ -906,12 +1018,13 @@ class TypeRedWindow(QMainWindow):
 
 ### 视图与导航
 
-| 快捷键      | 功能                     |
-|-------------|--------------------------|
-| `Ctrl+E`    | 切换编辑 / 阅读模式      |
-| `Ctrl+T`    | 循环切换主题（5 种）     |
+| 快捷键      | 功能                                   |
+|-------------|----------------------------------------|
+| `Ctrl+E`    | 切换编辑 / 阅读模式                    |
+| `Ctrl+T`    | 循环切换主题（5 种）                   |
 | `Ctrl+F`    | 搜索（阅读模式=页内，编辑模式=编辑区） |
-| `Ctrl+滚轮` | 缩放预览区               |
+| `Ctrl+H`    | 查找替换（仅编辑模式）                 |
+| `Ctrl+滚轮` | 缩放预览区                             |
 
 ### 编辑格式（编辑模式下）
 
@@ -927,6 +1040,7 @@ class TypeRedWindow(QMainWindow):
 | `Ctrl+0`          | 取消标题              |                   |
 | `Ctrl+Shift+U`    | 无序列表              | `- 项目`          |
 | `Ctrl+Shift+O`    | 有序列表              | `1. 项目`         |
+| `Ctrl+Shift+T`    | 插入表格（选行列）    |                   |
 | `Tab`             | 缩进（4 空格）        |                   |
 | `Shift+Tab`       | 取消缩进              |                   |
 
@@ -965,6 +1079,8 @@ class TypeRedWindow(QMainWindow):
 [链接文字](https://example.com)
 ![图片描述](image.png)
 ```
+
+> **提示**：编辑模式下可直接将图片文件（`.png/.jpg/.gif` 等）拖入编辑区，自动插入 `![]()` 语法。
 
 ### 代码
 
