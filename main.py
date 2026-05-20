@@ -10,6 +10,7 @@
 #//#260519 Red 0.4.3 任务栏图标支持最小化/还原切换/绿灯最大化还原
 #//#260519 Red 0.4.4 修复绿灯还原不回正确尺寸/任务栏SWP_FRAMECHANGED生效
 #//#260519 Red 0.4.5 修复关闭时保存最大化尺寸导致下次启动过大/默认窗口尺寸缩小
+#//#260520 Red 0.4.6 链接拦截(内链渲染/外链浏览器)/导航历史Alt+左右/修夋HTML块内Markdown渲染
 
 import sys
 import os
@@ -36,11 +37,11 @@ from PySide6.QtCore import (
 from PySide6.QtGui import (
     QIcon, QDragEnterEvent, QDropEvent, QKeySequence, QShortcut,
     QPainter, QColor, QPixmap, QFont, QPainterPath, QLinearGradient,
-    QMouseEvent, QAction, QTextCursor, QRegion
+    QMouseEvent, QAction, QTextCursor, QRegion, QDesktopServices,
 )
 from PySide6.QtPrintSupport import QPrinter
 
-VERSION  = "0.4.5"
+VERSION  = "0.4.6"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 MAX_RECENT = 10
@@ -111,7 +112,7 @@ def make_app_icon() -> QIcon:
 def _build_extensions() -> list:
     base = [
         'fenced_code', 'tables', 'attr_list', 'def_list',
-        'footnotes', 'nl2br',
+        'footnotes', 'nl2br', 'md_in_html',
         TocExtension(permalink=True, toc_depth='2-4'),
         'codehilite', 'sane_lists',
     ]
@@ -130,6 +131,12 @@ MD_EXTENSIONS = _build_extensions()
 
 
 def render_markdown(text: str) -> tuple[str, str]:
+    # 给 <div> 块自动加 markdown="1"，使 md_in_html 扩展能处理其中的 Markdown 语法
+    text = re.sub(
+        r'<div([^>]*)>',
+        lambda m: '<div' + m.group(1) + ' markdown="1">' if 'markdown=' not in m.group(1) else m.group(0),
+        text,
+    )
     md = markdown.Markdown(
         extensions=MD_EXTENSIONS,
         extension_configs={'codehilite': {'guess_lang': False, 'linenums': False}}
@@ -199,6 +206,29 @@ class DragFilter(QObject):
                     self._win.load_file(path)
                     return True
         return False
+
+
+
+# ── 自定义页面（链接拦截）────────────────────────────────────────────────────
+
+class MarkdownPage(QWebEnginePage):
+    """拦截链接点击：.md 文件在当前窗口渲染，http(s) 链接用系统浏览器打开。"""
+    _MD_EXTS = ('.md', '.markdown', '.mdown', '.txt')
+
+    def __init__(self, win, parent=None):
+        super().__init__(parent)
+        self._win = win
+
+    def acceptNavigationRequest(self, url, nav_type, _is_main):
+        if nav_type == QWebEnginePage.NavigationType.NavigationTypeLinkClicked:
+            path = url.toLocalFile()
+            if path and path.lower().endswith(self._MD_EXTS):
+                self._win.load_file(path)
+                return False
+            if url.scheme() in ('http', 'https'):
+                QDesktopServices.openUrl(url)
+                return False
+        return True
 
 
 # ── Markdown 编辑器 ───────────────────────────────────────────────────────────
@@ -808,6 +838,8 @@ class TypeRedWindow(QMainWindow):
         super().__init__()
         self._initial_file    = initial_file
         self._pre_max_geo     = None          # 最大化前保存的窗口尺寸
+        self._nav_history: list[str] = []    # 导航历史栈
+        self._nav_idx     = -1
         self.theme            = 'light'
         self.current_file     = ''
         self._current_text    = ''
@@ -845,6 +877,7 @@ class TypeRedWindow(QMainWindow):
         self.editor.setVisible(False)
 
         self.view = QWebEngineView()
+        self.view.setPage(MarkdownPage(self, self.view))
         self.view.setAcceptDrops(False)
         self._drag_filter = DragFilter(self)
         self.view.installEventFilter(self._drag_filter)
@@ -881,6 +914,16 @@ class TypeRedWindow(QMainWindow):
             QTimer.singleShot(0, lambda: self.load_file(self._initial_file))
         else:
             QTimer.singleShot(0, self._show_welcome)
+
+    def _nav_back(self):
+        if self._nav_idx > 0:
+            self._nav_idx -= 1
+            self.load_file(self._nav_history[self._nav_idx], _push_history=False)
+
+    def _nav_forward(self):
+        if self._nav_idx < len(self._nav_history) - 1:
+            self._nav_idx += 1
+            self.load_file(self._nav_history[self._nav_idx], _push_history=False)
 
     def _toggle_maximize(self):
         if self.isMaximized():
@@ -986,6 +1029,8 @@ class TypeRedWindow(QMainWindow):
         QShortcut(QKeySequence('Ctrl+S'),       self).activated.connect(self.save_file)
         QShortcut(QKeySequence('Ctrl+Shift+T'), self).activated.connect(self._insert_table_dialog)
         QShortcut(QKeySequence('Escape'),       self).activated.connect(self.search_bar.hide_bar)
+        QShortcut(QKeySequence('Alt+Left'),     self).activated.connect(self._nav_back)
+        QShortcut(QKeySequence('Alt+Right'),    self).activated.connect(self._nav_forward)
 
     def _toggle_search(self):
         if self._edit_mode:
@@ -1172,7 +1217,7 @@ H~2~O（下标）    x^2^（上标）
         if path:
             self.load_file(path)
 
-    def load_file(self, path: str):
+    def load_file(self, path: str, _push_history: bool = True):
         path = os.path.normpath(path)
         if not os.path.isfile(path):
             self.statusBar().showMessage(f'文件不存在：{path}')
@@ -1191,6 +1236,12 @@ H~2~O（下标）    x^2^（上标）
 
         self.current_file  = path
         self._current_text = text
+        if _push_history:
+            # 截断前进历史，推入当前路径
+            self._nav_history = self._nav_history[:self._nav_idx + 1]
+            if not self._nav_history or self._nav_history[-1] != path:
+                self._nav_history.append(path)
+            self._nav_idx = len(self._nav_history) - 1
         self._modified     = False
 
         if self._edit_mode:
