@@ -218,7 +218,8 @@ class MarkdownPage(QWebEnginePage):
     def acceptNavigationRequest(self, url, nav_type, _is_main):
         if nav_type == QWebEnginePage.NavigationType.NavigationTypeLinkClicked:
             path = url.toLocalFile()
-            if path and path.lower().endswith(self._MD_EXTS):
+            if path:
+                # 所有本地文件链接都通过 load_file 加载，确保历史栈记录
                 QTimer.singleShot(0, lambda p=path: self._win.load_file(p))
                 return False
             if url.scheme() in ('http', 'https'):
