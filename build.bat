@@ -1,5 +1,5 @@
 @echo off
-chcp 65001 >nul
+chcp 65001 >/dev/null
 echo [1/2] Generating icon...
 python make_icon.py
 if errorlevel 1 (
