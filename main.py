@@ -112,7 +112,7 @@ def make_app_icon() -> QIcon:
 def _build_extensions() -> list:
     base = [
         'fenced_code', 'tables', 'attr_list', 'def_list',
-        'footnotes', 'nl2br', 'md_in_html',
+        'footnotes', 'nl2br',
         TocExtension(permalink=True, toc_depth='2-4'),
         'codehilite', 'sane_lists',
     ]
@@ -131,12 +131,8 @@ MD_EXTENSIONS = _build_extensions()
 
 
 def render_markdown(text: str) -> tuple[str, str]:
-    # 给 <div> 块自动加 markdown="1"，使 md_in_html 扩展能处理其中的 Markdown 语法
-    text = re.sub(
-        r'<div([^>]*)>',
-        lambda m: '<div' + m.group(1) + ' markdown="1">' if 'markdown=' not in m.group(1) else m.group(0),
-        text,
-    )
+    # 剥除 <div> 标签（保留内容），避免 HTML 块阻断 Markdown 解析
+    text = re.sub(r"</?div[^>]*>", "", text)
     md = markdown.Markdown(
         extensions=MD_EXTENSIONS,
         extension_configs={'codehilite': {'guess_lang': False, 'linenums': False}}
@@ -223,10 +219,10 @@ class MarkdownPage(QWebEnginePage):
         if nav_type == QWebEnginePage.NavigationType.NavigationTypeLinkClicked:
             path = url.toLocalFile()
             if path and path.lower().endswith(self._MD_EXTS):
-                self._win.load_file(path)
+                QTimer.singleShot(0, lambda p=path: self._win.load_file(p))
                 return False
             if url.scheme() in ('http', 'https'):
-                QDesktopServices.openUrl(url)
+                QTimer.singleShot(0, lambda u=url: QDesktopServices.openUrl(u))
                 return False
         return True
 
