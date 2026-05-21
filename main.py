@@ -11,6 +11,7 @@
 #//#260519 Red 0.4.4 修复绿灯还原不回正确尺寸/任务栏SWP_FRAMECHANGED生效
 #//#260519 Red 0.4.5 修复关闭时保存最大化尺寸导致下次启动过大/默认窗口尺寸缩小
 #//#260520 Red 0.4.6 链接拦截(内链渲染/外链浏览器)/导航历史Alt+左右/修夋HTML块内Markdown渲染
+#//#260521 Red 0.5.0 行号显示/自动保存30s/TOC拖拽调宽/性能优化(MD复用+渲染缓存)/修复左下角缩放/修复保存触发重载
 
 import sys
 import os
@@ -31,7 +32,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEnginePage
 from PySide6.QtCore import (
-    Qt, QUrl, QPointF, QRectF, QEvent, QObject,
+    Qt, QUrl, QPointF, QRectF, QRect, QEvent, QObject,
     QFileSystemWatcher, QSettings, QSize, QPoint, QTimer,
 )
 from PySide6.QtGui import (
@@ -41,7 +42,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtPrintSupport import QPrinter
 
-VERSION  = "0.4.6"
+VERSION  = "0.5.0"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 MAX_RECENT = 10
@@ -76,13 +77,22 @@ THEME_PYG: dict[str, str] = {
     'night':    'monokai',
 }
 
-# 编辑器 bg / fg / 行号区 bg
+# 编辑器 bg / fg
 THEME_EDITOR: dict[str, tuple[str, str]] = {
     'light':    ('#ffffff', '#1a1a1a'),
     'eye-care': ('#f0f7f0', '#1a2e1a'),
     'cream':    ('#fdf6e3', '#2c1f0a'),
     'dark':     ('#1a1b26', '#c0caf5'),
     'night':    ('#0a0a0a', '#cccccc'),
+}
+
+# 行号区 bg / fg
+THEME_LINENO: dict[str, tuple[str, str]] = {
+    'light':    ('#f0f0f2', '#aaaaaa'),
+    'eye-care': ('#e4ede4', '#7a9a7a'),
+    'cream':    ('#ede4c8', '#a08858'),
+    'dark':     ('#13141d', '#5a5e7a'),
+    'night':    ('#080808', '#484848'),
 }
 
 # ── 程序化图标 ────────────────────────────────────────────────────────────────
@@ -121,24 +131,25 @@ def _build_extensions() -> list:
     for ext in optional:
         try:
             import importlib
-            importlib.import_module(ext.replace('.', '/').replace('/', '.'))
+            importlib.import_module(ext)
             base.append(ext)
         except Exception:
             pass
     return base
 
 MD_EXTENSIONS = _build_extensions()
+_MD = markdown.Markdown(
+    extensions=MD_EXTENSIONS,
+    extension_configs={'codehilite': {'guess_lang': False, 'linenums': False}}
+)
 
 
 def render_markdown(text: str) -> tuple[str, str]:
     # 剥除 <div> 标签（保留内容），避免 HTML 块阻断 Markdown 解析
     text = re.sub(r"</?div[^>]*>", "", text)
-    md = markdown.Markdown(
-        extensions=MD_EXTENSIONS,
-        extension_configs={'codehilite': {'guess_lang': False, 'linenums': False}}
-    )
-    body = md.convert(text)
-    toc  = getattr(md, 'toc', '')
+    _MD.reset()
+    body = _MD.convert(text)
+    toc  = getattr(_MD, 'toc', '')
     return body, toc
 
 
@@ -152,7 +163,7 @@ def pygments_css(theme: str) -> str:
 
 def build_page(body: str, toc: str, theme: str, title: str = '') -> str:
     css_path  = os.path.join(BASE_DIR, 'frontend', 'style.css').replace('\\', '/')
-    toc_block = f'<nav id="toc">{toc}</nav>' if toc.strip() else ''
+    toc_block = f'<nav id="toc">{toc}</nav><div id="toc-resize"></div>' if toc.strip() else ''
     return f"""<!DOCTYPE html>
 <html class="{theme}">
 <head>
@@ -174,6 +185,30 @@ def build_page(body: str, toc: str, theme: str, title: str = '') -> str:
       if (el) {{ e.preventDefault(); el.scrollIntoView({{behavior:'smooth'}}); }}
     }});
   }});
+  (function() {{
+    const handle = document.getElementById('toc-resize');
+    const toc = document.getElementById('toc');
+    if (!handle || !toc) return;
+    let dragging = false, startX = 0, startW = 0;
+    handle.addEventListener('mousedown', function(e) {{
+      dragging = true; startX = e.clientX; startW = toc.offsetWidth;
+      handle.classList.add('dragging');
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    }});
+    document.addEventListener('mousemove', function(e) {{
+      if (!dragging) return;
+      const w = Math.max(120, Math.min(480, startW + e.clientX - startX));
+      toc.style.width = w + 'px';
+      toc.style.minWidth = w + 'px';
+    }});
+    document.addEventListener('mouseup', function() {{
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove('dragging');
+      document.body.style.userSelect = '';
+    }});
+  }})();
 </script>
 </body>
 </html>"""
@@ -228,6 +263,20 @@ class MarkdownPage(QWebEnginePage):
         return True
 
 
+# ── 行号区 ────────────────────────────────────────────────────────────────────
+
+class LineNumberArea(QWidget):
+    def __init__(self, editor):
+        super().__init__(editor)
+        self._editor = editor
+
+    def sizeHint(self):
+        return QSize(self._editor._line_number_width(), 0)
+
+    def paintEvent(self, e):
+        self._editor._paint_line_numbers(e)
+
+
 # ── Markdown 编辑器 ───────────────────────────────────────────────────────────
 
 class Editor(QPlainTextEdit):
@@ -237,10 +286,65 @@ class Editor(QPlainTextEdit):
     def __init__(self, on_change):
         super().__init__()
         self._on_change = on_change
+        self._theme = 'light'
         self.setFont(QFont('Cascadia Code, JetBrains Mono, Consolas, Courier New', 13))
         self.setLineWrapMode(QPlainTextEdit.WidgetWidth)
         self.setTabStopDistance(28)  # 约4个字符宽
         self.textChanged.connect(on_change)
+
+        self._line_num_area = LineNumberArea(self)
+        self.blockCountChanged.connect(self._update_line_number_width)
+        self.updateRequest.connect(self._update_line_number_area)
+        self._update_line_number_width(0)
+
+    # ── 行号 ──────────────────────────────────────────────────────────────────
+
+    def _line_number_width(self) -> int:
+        digits = len(str(max(1, self.blockCount())))
+        return 10 + self.fontMetrics().horizontalAdvance('9') * digits
+
+    def _update_line_number_width(self, _):
+        self.setViewportMargins(self._line_number_width(), 0, 0, 0)
+
+    def _update_line_number_area(self, rect, dy):
+        if dy:
+            self._line_num_area.scroll(0, dy)
+        else:
+            self._line_num_area.update(0, rect.y(), self._line_num_area.width(), rect.height())
+        if rect.contains(self.viewport().rect()):
+            self._update_line_number_width(0)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        cr = self.contentsRect()
+        self._line_num_area.setGeometry(
+            QRect(cr.left(), cr.top(), self._line_number_width(), cr.height())
+        )
+
+    def _paint_line_numbers(self, event):
+        painter = QPainter(self._line_num_area)
+        bg, fg = THEME_LINENO.get(self._theme, ('#f0f0f2', '#aaaaaa'))
+        painter.fillRect(event.rect(), QColor(bg))
+
+        block     = self.firstVisibleBlock()
+        block_num = block.blockNumber()
+        top    = round(self.blockBoundingGeometry(block).translated(self.contentOffset()).top())
+        bottom = top + round(self.blockBoundingRect(block).height())
+        line_h = self.fontMetrics().height()
+
+        painter.setFont(self.font())
+        painter.setPen(QColor(fg))
+        while block.isValid() and top <= event.rect().bottom():
+            if block.isVisible() and bottom >= event.rect().top():
+                painter.drawText(
+                    QRect(0, top, self._line_num_area.width() - 5, line_h),
+                    Qt.AlignRight | Qt.AlignVCenter,
+                    str(block_num + 1)
+                )
+            block = block.next()
+            top    = bottom
+            bottom = top + round(self.blockBoundingRect(block).height())
+            block_num += 1
 
     # ── 格式包裹 ──────────────────────────────────────────────────────────────
 
@@ -362,6 +466,7 @@ class Editor(QPlainTextEdit):
         super().dropEvent(e)
 
     def apply_theme(self, theme: str):
+        self._theme = theme
         bg, fg = THEME_EDITOR[theme]
         _, _, border, _, _ = THEME_TB[theme]
         self.setStyleSheet(f"""
@@ -376,6 +481,7 @@ class Editor(QPlainTextEdit):
                 selection-background-color: rgba(91,124,247,0.35);
             }}
         """)
+        self._line_num_area.update()
 
 
 # ── macOS 交通灯 ──────────────────────────────────────────────────────────────
@@ -851,6 +957,11 @@ class TypeRedWindow(QMainWindow):
         self._preview_timer.setInterval(400)
         self._preview_timer.timeout.connect(self._update_preview)
 
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setInterval(30_000)
+        self._autosave_timer.timeout.connect(self._autosave)
+        self._autosave_timer.start()
+
         self._build_ui()
         self._restore_state()
         self.setAcceptDrops(True)
@@ -901,8 +1012,9 @@ class TypeRedWindow(QMainWindow):
         self.setCentralWidget(central)
 
         # 边缘缩放覆盖层（透明，只捕获边缘 8px）
-        self._edge_overlay = _EdgeOverlay(central, self)
-        self._edge_overlay.setGeometry(central.rect())
+        # 父控件设为主窗口本身，覆盖含 StatusBar 在内的完整窗口区域
+        self._edge_overlay = _EdgeOverlay(self, self)
+        self._edge_overlay.setGeometry(self.rect())
         self._edge_overlay.show()
         self._edge_overlay.raise_()
 
@@ -934,7 +1046,7 @@ class TypeRedWindow(QMainWindow):
     def resizeEvent(self, e):
         super().resizeEvent(e)
         if hasattr(self, '_edge_overlay'):
-            self._edge_overlay.setGeometry(self.centralWidget().rect())
+            self._edge_overlay.setGeometry(self.rect())
 
     def showEvent(self, e):
         super().showEvent(e)
@@ -1269,9 +1381,12 @@ H~2~O（下标）    x^2^（上标）
             self._watcher.addPath(path)
         text = self.editor.toPlainText()
         try:
+            self._watcher.removePath(self.current_file)
             with open(self.current_file, 'w', encoding='utf-8') as f:
                 f.write(text)
+            self._watcher.addPath(self.current_file)
         except Exception as ex:
+            self._watcher.addPath(self.current_file)
             self.statusBar().showMessage(f'保存失败：{ex}')
             return
         self._current_text = text
@@ -1282,6 +1397,25 @@ H~2~O（下标）    x^2^（上标）
     def _reload_from_disk(self):
         if self.current_file:
             self.load_file(self.current_file)
+
+    def _autosave(self):
+        if not (self._edit_mode and self._modified and self.current_file):
+            return
+        text = self.editor.toPlainText()
+        try:
+            # 暂停 watcher，避免写入触发 _on_file_changed 重新加载
+            self._watcher.removePath(self.current_file)
+            with open(self.current_file, 'w', encoding='utf-8') as f:
+                f.write(text)
+            self._watcher.addPath(self.current_file)
+            self._current_text = text
+            self._modified = False
+            self._update_title()
+            self.statusBar().showMessage(
+                f'自动保存：{os.path.basename(self.current_file)}', 2000
+            )
+        except Exception:
+            self._watcher.addPath(self.current_file)
 
     def _on_file_changed(self, path: str):
         if path == self.current_file and os.path.isfile(path) and not self._modified:
@@ -1324,6 +1458,10 @@ H~2~O（下标）    x^2^（上标）
         if not text and not self.current_file:
             return
         title = os.path.basename(self.current_file) if self.current_file else APP_NAME
+        key = (self.theme, title, text)
+        if key == getattr(self, '_last_render_key', None):
+            return
+        self._last_render_key = key
         body, toc = render_markdown(text)
         if self.current_file:
             base_url = QUrl.fromLocalFile(os.path.dirname(self.current_file) + '/')
