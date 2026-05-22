@@ -1,6 +1,9 @@
 # 📝 TypeRed — Markdown Reader & Editor
 
 版本：`0.5.0` · 作者：Red · Windows 10/11 · Python 3.10+
+[![GitHub Tag](https://img.shields.io/github/v/tag/JiaHuiRed/TypeRed?label=版本&color=blue&logo=github)](CHANGELOG.md)
+[![许可证](https://img.shields.io/badge/许可证-MIT-lightgrey)](LICENSE)
+
 
 > 贫穷的我用来替代 Typora 的轻量级 Markdown 阅读器 ✨
 
@@ -110,6 +113,9 @@ build.bat
 | 0.2.0 | 2026-05-18 | 最近文件/自动刷新/页内搜索/导出PDF/记住窗口    |
 | 0.1.0 | 2026-05-18 | 5主题/macOS交通灯/程序化图标/改名TypeRed       |
 | 0.0.1 | 2026-05-18 | 初始版本                                        |
+
+
+> 完整变更日志参见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 📐 版本规则
 
