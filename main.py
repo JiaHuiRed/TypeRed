@@ -846,7 +846,7 @@ class _EdgeOverlay(QWidget):
     """透明覆盖层，`setMask` 只在窗口边缘接收鼠标事件，
        中间区域事件穿透到子部件。处理边缘拖拽缩放。"""
     _MARGIN    = 8   # 上/下/左 边缘宽度
-    _MARGIN_R  = 4   //#260522 Red 右侧用更小边距，避免与 WebView 滚动条重叠
+    _MARGIN_R  = 4   # 260522 Red 右侧用更小边距，避免与 WebView 滚动条重叠
     _MIN_W     = 640
     _MIN_H     = 420
     _CURSORS   = {
@@ -870,7 +870,7 @@ class _EdgeOverlay(QWidget):
         w, h = self.width(), self.height()
         m, mr = self._MARGIN, self._MARGIN_R
         full  = QRegion(0, 0, w, h)
-        inner = QRegion(m, m, w - m - mr, h - 2*m)  //#260522 Red 右侧用 mr
+        inner = QRegion(m, m, w - m - mr, h - 2*m)  # 260522 Red 右侧用 mr
         self.setMask(full.subtracted(inner))
 
     def resizeEvent(self, e):
@@ -881,7 +881,7 @@ class _EdgeOverlay(QWidget):
         w, h = self.width(), self.height()
         m, mr = self._MARGIN, self._MARGIN_R
         x, y = int(pos.x()), int(pos.y())
-        on_l = x <= m; on_r = x >= w - mr - 1  //#260522 Red 右侧检测用 mr
+        on_l = x <= m; on_r = x >= w - mr - 1  # 260522 Red 右侧检测用 mr
         on_t = y <= m; on_b = y >= h - m - 1
         if on_t and on_l: return 'tl'
         if on_t and on_r: return 'tr'
