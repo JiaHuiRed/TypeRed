@@ -1,5 +1,5 @@
 # author Red
-# TypeRed — Markdown Reader & Editor v0.4.3
+# TypeRed — Markdown Reader & Editor v0.5.1
 #//#260518 Red 0.3.0 编辑模式/实时预览/Markdown格式快捷键/上下标高亮渲染
 #//#260518 Red 0.3.1 欢迎页详细化/修复代码围栏嵌套渲染/README补全快捷键
 #//#260518 Red 0.3.2 pygments_css缓存/字数统计/编辑模式Ctrl+F指向编辑区
@@ -12,6 +12,7 @@
 #//#260519 Red 0.4.5 修复关闭时保存最大化尺寸导致下次启动过大/默认窗口尺寸缩小
 #//#260520 Red 0.4.6 链接拦截(内链渲染/外链浏览器)/导航历史Alt+左右/修夋HTML块内Markdown渲染
 #//#260521 Red 0.5.0 行号显示/自动保存30s/TOC拖拽调宽/性能优化(MD复用+渲染缓存)/修复左下角缩放/修复保存触发重载
+#//#260522 Red 0.5.1 修复右侧边缘缩放与WebView滚动条重叠（右侧检测边距缩小至4px）
 
 import sys
 import os
@@ -42,7 +43,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtPrintSupport import QPrinter
 
-VERSION  = "0.5.0"
+VERSION  = "0.5.1"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 MAX_RECENT = 10
@@ -842,9 +843,10 @@ class SearchBar(QWidget):
 # ── 边缘缩放覆盖层（纯 Qt，不依赖 Windows API） ──────────────────────────────
 
 class _EdgeOverlay(QWidget):
-    """透明覆盖层，`setMask` 只在窗口边缘 8px 接收鼠标事件，
+    """透明覆盖层，`setMask` 只在窗口边缘接收鼠标事件，
        中间区域事件穿透到子部件。处理边缘拖拽缩放。"""
-    _MARGIN    = 8
+    _MARGIN    = 8   # 上/下/左 边缘宽度
+    _MARGIN_R  = 4   //#260522 Red 右侧用更小边距，避免与 WebView 滚动条重叠
     _MIN_W     = 640
     _MIN_H     = 420
     _CURSORS   = {
@@ -866,9 +868,9 @@ class _EdgeOverlay(QWidget):
 
     def _update_mask(self):
         w, h = self.width(), self.height()
-        m = self._MARGIN
+        m, mr = self._MARGIN, self._MARGIN_R
         full  = QRegion(0, 0, w, h)
-        inner = QRegion(m, m, w - 2*m, h - 2*m)
+        inner = QRegion(m, m, w - m - mr, h - 2*m)  //#260522 Red 右侧用 mr
         self.setMask(full.subtracted(inner))
 
     def resizeEvent(self, e):
@@ -877,9 +879,9 @@ class _EdgeOverlay(QWidget):
 
     def _edge_at(self, pos):
         w, h = self.width(), self.height()
-        m = self._MARGIN
+        m, mr = self._MARGIN, self._MARGIN_R
         x, y = int(pos.x()), int(pos.y())
-        on_l = x <= m; on_r = x >= w - m - 1
+        on_l = x <= m; on_r = x >= w - mr - 1  //#260522 Red 右侧检测用 mr
         on_t = y <= m; on_b = y >= h - m - 1
         if on_t and on_l: return 'tl'
         if on_t and on_r: return 'tr'
