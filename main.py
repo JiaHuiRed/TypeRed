@@ -1,5 +1,5 @@
 # author Red
-# TypeRed — Markdown Reader & Editor v0.5.1
+# TypeRed — Markdown Reader & Editor v0.5.2
 #//#260518 Red 0.3.0 编辑模式/实时预览/Markdown格式快捷键/上下标高亮渲染
 #//#260518 Red 0.3.1 欢迎页详细化/修复代码围栏嵌套渲染/README补全快捷键
 #//#260518 Red 0.3.2 pygments_css缓存/字数统计/编辑模式Ctrl+F指向编辑区
@@ -13,6 +13,7 @@
 #//#260520 Red 0.4.6 链接拦截(内链渲染/外链浏览器)/导航历史Alt+左右/修夋HTML块内Markdown渲染
 #//#260521 Red 0.5.0 行号显示/自动保存30s/TOC拖拽调宽/性能优化(MD复用+渲染缓存)/修复左下角缩放/修复保存触发重载
 #//#260522 Red 0.5.1 修复右侧边缘缩放与WebView滚动条重叠（右侧检测边距缩小至4px）
+#//#260523 Red 0.5.2 修复正文目录锚点无法跳转（JS优先preventDefault + Python同文件fragment检测）
 
 import sys
 import os
@@ -43,7 +44,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtPrintSupport import QPrinter
 
-VERSION  = "0.5.1"
+VERSION  = "0.5.2"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 MAX_RECENT = 10
@@ -179,11 +180,12 @@ def build_page(body: str, toc: str, theme: str, title: str = '') -> str:
   <article id="content">{body}</article>
 </div>
 <script>
-  document.querySelectorAll('#toc a').forEach(a => {{
+  document.querySelectorAll('#toc a, #content a[href^="#"]').forEach(a => {{
     a.addEventListener('click', e => {{
+      e.preventDefault();
       const id = a.getAttribute('href').replace(/.*#/, '');
       const el = document.getElementById(id);
-      if (el) {{ e.preventDefault(); el.scrollIntoView({{behavior:'smooth'}}); }}
+      if (el) {{ el.scrollIntoView({{behavior:'smooth'}}); }}
     }});
   }});
   (function() {{
@@ -255,6 +257,12 @@ class MarkdownPage(QWebEnginePage):
         if nav_type == QWebEnginePage.NavigationType.NavigationTypeLinkClicked:
             path = url.toLocalFile()
             if path:
+                fragment = url.fragment()
+                if fragment and os.path.normpath(path) == self._win.current_file:
+                    # 同文件锚点跳转：用 JS 滚动，不重新加载
+                    js = f'(function(){{var e=document.getElementById("{fragment}");if(e)e.scrollIntoView({{behavior:"smooth"}})}})();'
+                    QTimer.singleShot(0, lambda s=js: self._win.view.page().runJavaScript(s))
+                    return False
                 # 所有本地文件链接都通过 load_file 加载，确保历史栈记录
                 QTimer.singleShot(0, lambda p=path: self._win.load_file(p))
                 return False

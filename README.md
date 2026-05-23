@@ -1,9 +1,11 @@
 # 📝 TypeRed — Markdown Reader & Editor
 
 [![GitHub Tag](https://img.shields.io/github/v/tag/JiaHuiRed/TypeRed?label=版本&color=blue&logo=github)](CHANGELOG.md)
+[![平台](https://img.shields.io/badge/平台-Windows%2010%2F11-0078d7?logo=windows&logoColor=white)](README.md)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?logo=python&logoColor=white)](README.md)
 [![许可证](https://img.shields.io/badge/许可证-MIT-lightgrey)](LICENSE)
 
-作者：Red · Windows 10/11 · Python 3.10+
+作者：Red
 
 
 > 贫穷的我用来替代 Typora 的轻量级 Markdown 阅读器 ✨
@@ -99,6 +101,7 @@ build.bat
 
 | 版本  | 日期       | 说明                                                              |
 |-------|------------|-------------------------------------------------------------------|
+| 0.5.2 | 2026-05-23 | 修复正文目录锚点无法跳转（JS优先preventDefault + Python同文件fragment检测） |
 | 0.5.1 | 2026-05-22 | 修复右侧边缘缩放与 WebView 滚动条重叠（右侧检测边距缩小至 4px）   |
 | 0.5.0 | 2026-05-21 | 行号显示/自动保存30s/TOC拖拽调宽/性能优化/修复左下角缩放/修复保存触发重载 |
 | 0.4.6 | 2026-05-20 | 链接拦截渲染/外链浏览器/Alt导航/修复HTML块渲染                    |

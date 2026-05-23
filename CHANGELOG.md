@@ -7,6 +7,14 @@
 
 ---
 
+## [0.5.2] - 2026-05-23
+
+### 修复
+- 修复正文目录（`#content` 内）锚点链接无法跳转：将 `e.preventDefault()` 提前至 `if (el)` 判断之前，避免找不到元素时浏览器触发导航
+- 修复 `acceptNavigationRequest` 对同文件 fragment 链接误调用 `load_file` 导致整页重载：检测 `url.fragment()` 非空且路径与当前文件相同时，改为用 `runJavaScript` 滚动到目标元素
+
+---
+
 ## [0.5.1] - 2026-05-22
 
 ### 修复
