@@ -1,5 +1,5 @@
 # author Red
-# TypeRed — Markdown Reader & Editor v0.5.2
+# TypeRed — Markdown Reader & Editor v0.5.3
 #//#260518 Red 0.3.0 编辑模式/实时预览/Markdown格式快捷键/上下标高亮渲染
 #//#260518 Red 0.3.1 欢迎页详细化/修复代码围栏嵌套渲染/README补全快捷键
 #//#260518 Red 0.3.2 pygments_css缓存/字数统计/编辑模式Ctrl+F指向编辑区
@@ -18,6 +18,7 @@
 import sys
 import os
 import re
+import math
 import ctypes
 from functools import lru_cache
 
@@ -40,7 +41,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import (
     QIcon, QDragEnterEvent, QDropEvent, QKeySequence, QShortcut,
     QPainter, QColor, QPixmap, QFont, QPainterPath, QLinearGradient,
-    QMouseEvent, QAction, QTextCursor, QRegion, QDesktopServices,
+    QMouseEvent, QAction, QTextCursor, QRegion, QDesktopServices, QMovie,
 )
 from PySide6.QtPrintSupport import QPrinter
 
@@ -139,19 +140,22 @@ def _build_extensions() -> list:
             pass
     return base
 
-MD_EXTENSIONS = _build_extensions()
-_MD = markdown.Markdown(
-    extensions=MD_EXTENSIONS,
-    extension_configs={'codehilite': {'guess_lang': False, 'linenums': False}}
-)
+
 
 
 def render_markdown(text: str) -> tuple[str, str]:
-    # 剥除 <div> 标签（保留内容），避免 HTML 块阻断 Markdown 解析
+    #260525 Red 懒加载 Markdown 实例，省模块导入时间
+    if not hasattr(render_markdown, '_md'):
+        exts = _build_extensions()
+        render_markdown._md = markdown.Markdown(
+            extensions=exts,
+            extension_configs={'codehilite': {'guess_lang': False, 'linenums': False}}
+        )
+    md = render_markdown._md
+    md.reset()
     text = re.sub(r"</?div[^>]*>", "", text)
-    _MD.reset()
-    body = _MD.convert(text)
-    toc  = getattr(_MD, 'toc', '')
+    body = md.convert(text)
+    toc  = getattr(md, 'toc', '')
     return body, toc
 
 
@@ -305,6 +309,8 @@ class Editor(QPlainTextEdit):
         self.blockCountChanged.connect(self._update_line_number_width)
         self.updateRequest.connect(self._update_line_number_area)
         self._update_line_number_width(0)
+
+
 
     # ── 行号 ──────────────────────────────────────────────────────────────────
 
@@ -491,7 +497,6 @@ class Editor(QPlainTextEdit):
             }}
         """)
         self._line_num_area.update()
-
 
 # ── macOS 交通灯 ──────────────────────────────────────────────────────────────
 
@@ -999,6 +1004,7 @@ class TypeRedWindow(QMainWindow):
         self.view.setAcceptDrops(False)
         self._drag_filter = DragFilter(self)
         self.view.installEventFilter(self._drag_filter)
+        self._view_ready = True
 
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.setHandleWidth(1)
@@ -1020,6 +1026,33 @@ class TypeRedWindow(QMainWindow):
         layout.addWidget(self.splitter, 1)
         layout.addWidget(self.search_bar)
         self.setCentralWidget(central)
+
+        #260525 Red 左侧猫猫（阅读/编辑模式都可见）
+        cat_path = os.path.join(BASE_DIR, 'frontend', 'mona-loading.gif')
+        self._cat_movie = QMovie(cat_path)
+        self._cat_movie.setScaledSize(QSize(60, 60))
+        self._cat_label = QLabel(central)
+        self._cat_label.setFixedSize(64, 64)
+        self._cat_label.setMovie(self._cat_movie)
+        self._cat_label.setStyleSheet('')
+        self._cat_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._cat_movie.start()
+        self._cat_movie.stop()
+
+        #260525 Red 猫猫：空闲时 GIF 循环，打字时左右弹跳
+        self._cat_bounce_active = False
+        self._cat_bounce_phase = 0
+        self._cat_bounce_timer = QTimer(self)
+        self._cat_bounce_timer.setInterval(60)
+        self._cat_bounce_timer.timeout.connect(self._cat_bounce_step)
+        self._cat_idle_timer = QTimer(self)
+        self._cat_idle_timer.setSingleShot(True)
+        self._cat_idle_timer.setInterval(1500)
+        self._cat_idle_timer.timeout.connect(self._cat_stop_bounce)
+        self._cat_movie.start()
+        self.editor.textChanged.connect(self._cat_typing)
+        self.editor.cursorPositionChanged.connect(self._sync_preview_from_cursor)
+        self.splitter.splitterMoved.connect(self._reposition_cat)
 
         # 边缘缩放覆盖层（透明，只捕获边缘 8px）
         # 父控件设为主窗口本身，覆盖含 StatusBar 在内的完整窗口区域
@@ -1053,10 +1086,21 @@ class TypeRedWindow(QMainWindow):
             self._pre_max_geo = self.geometry()
             self.showMaximized()
 
+    def _reposition_cat(self):
+        cw = self.centralWidget()
+        if not cw:
+            return
+        if self._edit_mode:
+            editor_w = self.splitter.widget(0).width()
+            x = editor_w + 8
+        else:
+            x = 8
+        self._cat_label.move(x, cw.height() - self._cat_label.height() - 8)
+
     def resizeEvent(self, e):
         super().resizeEvent(e)
-        if hasattr(self, '_edge_overlay'):
-            self._edge_overlay.setGeometry(self.rect())
+        self._edge_overlay.setGeometry(self.rect())
+        self._reposition_cat()
 
     def showEvent(self, e):
         super().showEvent(e)
@@ -1451,6 +1495,44 @@ H~2~O（下标）    x^2^（上标）
             self.editor.setVisible(False)
             self.splitter.setSizes([0, self.width()])
         self.titlebar.set_edit_active(self._edit_mode)
+        if self._edit_mode:
+            self._reposition_cat()
+            self._cat_movie.start()
+        else:
+            self._cat_bounce_active = False
+            self._cat_bounce_timer.stop()
+            self._cat_idle_timer.stop()
+            self._reposition_cat()
+            self._cat_movie.start()
+
+    def _cat_typing(self):
+        if not self._edit_mode:
+            return
+        if not self._cat_bounce_active:
+            self._cat_bounce_active = True
+            self._cat_bounce_phase = 0
+            self._cat_movie.stop()
+            self._cat_bounce_timer.start()
+        self._cat_idle_timer.start()
+
+    def _cat_stop_bounce(self):
+        self._cat_bounce_active = False
+        self._cat_bounce_timer.stop()
+        self._reposition_cat()
+        self._cat_movie.start()
+
+    def _cat_bounce_step(self):
+        if not self._cat_bounce_active:
+            return
+        self._cat_bounce_phase += 1
+        offset = math.sin(self._cat_bounce_phase * 0.25) * 10
+        cw = self.centralWidget()
+        if cw:
+            if self._edit_mode:
+                base_x = self.splitter.widget(0).width() + 8
+            else:
+                base_x = 8
+            self._cat_label.move(int(base_x + offset), cw.height() - self._cat_label.height() - 8)
 
     def _on_editor_changed(self):
         if not self._modified:
@@ -1463,6 +1545,27 @@ H~2~O（下标）    x^2^（上标）
         lines = self.editor.blockCount()
         self.statusBar().showMessage(f'{words} 词  ·  {chars} 字符  ·  {lines} 行')
 
+    def _sync_preview_scroll(self):
+        ratio = getattr(self, '_pending_scroll_ratio', None)
+        if ratio is None:
+            return
+        self._pending_scroll_ratio = None
+        js = f'''
+            var ms = Math.max(0, document.body.scrollHeight - window.innerHeight);
+            window.scrollTo(0, ms * {ratio});
+        '''
+        self.view.page().runJavaScript(js)
+
+    def _sync_preview_from_cursor(self):
+        if not self._edit_mode:
+            return
+        text = self.editor.toPlainText()
+        if not text:
+            return
+        ratio = self.editor.textCursor().position() / max(len(text), 1)
+        self._pending_scroll_ratio = ratio
+        QTimer.singleShot(50, self._sync_preview_scroll)
+
     def _update_preview(self):
         text = self.editor.toPlainText() if self._edit_mode else self._current_text
         if not text and not self.current_file:
@@ -1470,14 +1573,21 @@ H~2~O（下标）    x^2^（上标）
         title = os.path.basename(self.current_file) if self.current_file else APP_NAME
         key = (self.theme, title, text)
         if key == getattr(self, '_last_render_key', None):
+            self._sync_preview_from_cursor()
             return
         self._last_render_key = key
+        if self._edit_mode:
+            self._pending_scroll_ratio = self.editor.textCursor().position() / max(len(text), 1)
+        else:
+            self._pending_scroll_ratio = None
         body, toc = render_markdown(text)
         if self.current_file:
             base_url = QUrl.fromLocalFile(os.path.dirname(self.current_file) + '/')
         else:
             base_url = QUrl(f'file:///{BASE_DIR}/')
         self.view.setHtml(build_page(body, toc, self.theme, title), base_url)
+        if self._pending_scroll_ratio is not None:
+            QTimer.singleShot(120, self._sync_preview_scroll)
 
     def _update_title(self):
         if self.current_file:
@@ -1512,6 +1622,9 @@ H~2~O（下标）    x^2^（上标）
         self.titlebar.set_edit_active(self._edit_mode)
         self.search_bar.apply_theme(theme)
         self.editor.apply_theme(theme)
+        #260525 Red 猫猫边框跟随主题
+        _, _, border, _, _ = THEME_TB[theme]
+        self._cat_label.setStyleSheet(f'border: 1px solid {border}; border-radius: 10px;')
         if self.current_file or self._edit_mode:
             self._update_preview()
         else:

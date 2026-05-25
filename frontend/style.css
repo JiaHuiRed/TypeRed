@@ -1,10 +1,10 @@
-/* author Red */
-/* TypeRed — Markdown Reader 样式 v0.3.0 */
-/* #260518 Red 0.1.0 新增护眼/米黄/夜间主题 */
+﻿/* author Red */
+/* TypeRed 鈥?Markdown Reader 鏍峰紡 v0.3.0 */
+/* #260518 Red 0.1.0 鏂板鎶ょ溂/绫抽粍/澶滈棿涓婚 */
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-/* ── 根变量 ── */
+/* 鈹€鈹€ 鏍瑰彉閲?鈹€鈹€ */
 html.light {
   --bg:          #ffffff;
   --bg-sidebar:  #f6f6f7;
@@ -35,7 +35,7 @@ html.dark {
   --scrollbar:   #3b3d57;
 }
 
-/* 护眼绿 */
+/* 鎶ょ溂缁?*/
 html.eye-care {
   --bg:          #f0f7f0;
   --bg-sidebar:  #e4f0e4;
@@ -51,7 +51,7 @@ html.eye-care {
   --scrollbar:   #9cc49c;
 }
 
-/* 米黄 */
+/* 绫抽粍 */
 html.cream {
   --bg:          #fdf6e3;
   --bg-sidebar:  #f5ead0;
@@ -67,7 +67,7 @@ html.cream {
   --scrollbar:   #c8a060;
 }
 
-/* 夜间（深黑） */
+/* 澶滈棿锛堟繁榛戯級 */
 html.night {
   --bg:          #0a0a0a;
   --bg-sidebar:  #111111;
@@ -92,13 +92,13 @@ html, body {
   line-height: 1.75;
 }
 
-/* ── 布局 ── */
+/* 鈹€鈹€ 甯冨眬 鈹€鈹€ */
 #layout {
   display: flex;
   min-height: 100%;
 }
 
-/* ── TOC 侧边栏 ── */
+/* 鈹€鈹€ TOC 渚ц竟鏍?鈹€鈹€ */
 #toc {
   position: sticky;
   top: 0;
@@ -116,7 +116,7 @@ html, body {
 }
 
 #toc::before {
-  content: '目录';
+  content: '鐩綍';
   display: block;
   font-size: 11px;
   font-weight: 700;
@@ -152,7 +152,7 @@ html, body {
   background: var(--code-bg);
 }
 
-/* ── 正文 ── */
+/* 鈹€鈹€ 姝ｆ枃 鈹€鈹€ */
 #content {
   flex: 1;
   max-width: 860px;
@@ -160,7 +160,7 @@ html, body {
   padding: 40px 48px 80px;
 }
 
-/* ── 标题 ── */
+/* 鈹€鈹€ 鏍囬 鈹€鈹€ */
 #content h1, #content h2, #content h3,
 #content h4, #content h5, #content h6 {
   font-weight: 600;
@@ -175,7 +175,7 @@ html, body {
 #content h4 { font-size: 1.1em; }
 #content h5, #content h6 { font-size: 1em; color: var(--text-muted); }
 
-/* 标题锚点 */
+/* 鏍囬閿氱偣 */
 #content .headerlink {
   opacity: 0;
   margin-left: 6px;
@@ -189,16 +189,16 @@ html, body {
 #content h3:hover .headerlink,
 #content h4:hover .headerlink { opacity: 1; }
 
-/* ── 段落/链接 ── */
+/* 鈹€鈹€ 娈佃惤/閾炬帴 鈹€鈹€ */
 #content p  { margin: 0.8em 0; }
 #content a  { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
 #content a:hover { opacity: 0.8; }
 
-/* ── 强调 ── */
+/* 鈹€鈹€ 寮鸿皟 鈹€鈹€ */
 #content strong { font-weight: 600; }
 #content em     { font-style: italic; }
 
-/* ── 列表 ── */
+/* 鈹€鈹€ 鍒楄〃 鈹€鈹€ */
 #content ul, #content ol {
   margin: 0.6em 0;
   padding-left: 1.8em;
@@ -206,13 +206,13 @@ html, body {
 #content li { margin: 0.25em 0; }
 #content li > ul, #content li > ol { margin: 0.2em 0; }
 
-/* 任务列表 */
+/* 浠诲姟鍒楄〃 */
 #content input[type="checkbox"] {
   margin-right: 6px;
   vertical-align: middle;
 }
 
-/* ── 引用块 ── */
+/* 鈹€鈹€ 寮曠敤鍧?鈹€鈹€ */
 #content blockquote {
   margin: 1em 0;
   padding: 0.6em 1em;
@@ -223,14 +223,14 @@ html, body {
 }
 #content blockquote p { margin: 0; }
 
-/* ── 分隔线 ── */
+/* 鈹€鈹€ 鍒嗛殧绾?鈹€鈹€ */
 #content hr {
   border: none;
   border-top: 1px solid var(--border);
   margin: 2em 0;
 }
 
-/* ── 行内代码 ── */
+/* 鈹€鈹€ 琛屽唴浠ｇ爜 鈹€鈹€ */
 #content code {
   font-family: 'Cascadia Code', 'JetBrains Mono', 'Fira Code', Consolas, monospace;
   font-size: 0.875em;
@@ -241,7 +241,7 @@ html, body {
   border: 1px solid var(--border);
 }
 
-/* ── 代码块 ── */
+/* 鈹€鈹€ 浠ｇ爜鍧?鈹€鈹€ */
 #content .codehilite {
   margin: 1em 0;
   border-radius: 8px;
@@ -258,7 +258,7 @@ html, body {
   line-height: 1.6;
 }
 
-/* 代码块内的 code 不再加内边距/边框 */
+/* 浠ｇ爜鍧楀唴鐨?code 涓嶅啀鍔犲唴杈硅窛/杈规 */
 #content .codehilite code {
   background: transparent;
   border: none;
@@ -266,7 +266,7 @@ html, body {
   font-size: 1em;
 }
 
-/* ── 表格 ── */
+/* 鈹€鈹€ 琛ㄦ牸 鈹€鈹€ */
 #content table {
   width: 100%;
   border-collapse: collapse;
@@ -286,14 +286,14 @@ html, body {
   background: color-mix(in srgb, var(--bg-sidebar) 60%, transparent);
 }
 
-/* ── 图片 ── */
+/* 鈹€鈹€ 鍥剧墖 鈹€鈹€ */
 #content img {
   max-width: 100%;
   border-radius: 6px;
   margin: 0.5em 0;
 }
 
-/* ── 脚注 ── */
+/* 鈹€鈹€ 鑴氭敞 鈹€鈹€ */
 #content .footnote {
   font-size: 0.85em;
   color: var(--text-muted);
@@ -302,7 +302,7 @@ html, body {
   padding-top: 1em;
 }
 
-/* ── 高亮 / 上下标 ── */
+/* 鈹€鈹€ 楂樹寒 / 涓婁笅鏍?鈹€鈹€ */
 #content mark {
   background: #ffe066;
   color: #1a1a1a;
@@ -322,14 +322,23 @@ html.cream    #content mark { background: #f5d080; color: #2c1f0a; }
   line-height: 0;
 }
 
-/* ── 分隔线 ── */
-/* ── 滚动条 ── */
-::-webkit-scrollbar       { width: 6px; height: 6px; }
+/* 鈹€鈹€ 鍒嗛殧绾?鈹€鈹€ */
+/* 鈹€鈹€ 260525 Red macOS 椋庢牸婊氬姩鏉★細缁嗐€佸崐閫忔槑銆乭over 鏄捐壊 鈹€鈹€ */
+::-webkit-scrollbar       { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--link); }
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--scrollbar) 30%, transparent);
+  border-radius: 2px;
+  transition: background 0.2s;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--scrollbar) 70%, transparent);
+}
+::-webkit-scrollbar-thumb:active {
+  background: color-mix(in srgb, var(--scrollbar) 90%, transparent);
+}
 
-/* ── TOC 拖拽分隔线 ── */
+/* 鈹€鈹€ TOC 鎷栨嫿鍒嗛殧绾?鈹€鈹€ */
 #toc-resize {
   width: 4px;
   flex-shrink: 0;
@@ -342,7 +351,7 @@ html.cream    #content mark { background: #f5d080; color: #2c1f0a; }
   background: var(--link);
 }
 
-/* ── 无 TOC 时正文居中 ── */
+/* 鈹€鈹€ 鏃?TOC 鏃舵鏂囧眳涓?鈹€鈹€ */
 #layout:not(:has(#toc)) #content {
   padding-left: 48px;
 }
