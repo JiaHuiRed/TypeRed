@@ -1,5 +1,5 @@
 # author Red
-# TypeRed — Markdown Reader & Editor v0.5.3
+# TypeRed — Markdown Reader & Editor v0.5.4
 #//#260518 Red 0.3.0 编辑模式/实时预览/Markdown格式快捷键/上下标高亮渲染
 #//#260518 Red 0.3.1 欢迎页详细化/修复代码围栏嵌套渲染/README补全快捷键
 #//#260518 Red 0.3.2 pygments_css缓存/字数统计/编辑模式Ctrl+F指向编辑区
@@ -14,6 +14,7 @@
 #//#260521 Red 0.5.0 行号显示/自动保存30s/TOC拖拽调宽/性能优化(MD复用+渲染缓存)/修复左下角缩放/修复保存触发重载
 #//#260522 Red 0.5.1 修复右侧边缘缩放与WebView滚动条重叠（右侧检测边距缩小至4px）
 #//#260523 Red 0.5.2 修复正文目录锚点无法跳转（JS优先preventDefault + Python同文件fragment检测）
+#//#260526 Red 0.5.4 延迟创建QWebEngineView启动速度优化/PyInstaller启动屏
 
 import sys
 import os
@@ -32,8 +33,6 @@ from PySide6.QtWidgets import (
     QPlainTextEdit, QSplitter,
     QDialog, QSpinBox, QFormLayout, QDialogButtonBox,
 )
-from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWebEngineCore import QWebEnginePage
 from PySide6.QtCore import (
     Qt, QUrl, QPointF, QRectF, QRect, QEvent, QObject,
     QFileSystemWatcher, QSettings, QSize, QPoint, QTimer,
@@ -43,9 +42,8 @@ from PySide6.QtGui import (
     QPainter, QColor, QPixmap, QFont, QPainterPath, QLinearGradient,
     QMouseEvent, QAction, QTextCursor, QRegion, QDesktopServices, QMovie,
 )
-from PySide6.QtPrintSupport import QPrinter
 
-VERSION  = "0.5.2"
+VERSION  = "0.5.4"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 MAX_RECENT = 10
@@ -249,31 +247,7 @@ class DragFilter(QObject):
 
 # ── 自定义页面（链接拦截）────────────────────────────────────────────────────
 
-class MarkdownPage(QWebEnginePage):
-    """拦截链接点击：.md 文件在当前窗口渲染，http(s) 链接用系统浏览器打开。"""
-    _MD_EXTS = ('.md', '.markdown', '.mdown', '.txt')
-
-    def __init__(self, win, parent=None):
-        super().__init__(parent)
-        self._win = win
-
-    def acceptNavigationRequest(self, url, nav_type, _is_main):
-        if nav_type == QWebEnginePage.NavigationType.NavigationTypeLinkClicked:
-            path = url.toLocalFile()
-            if path:
-                fragment = url.fragment()
-                if fragment and os.path.normpath(path) == self._win.current_file:
-                    # 同文件锚点跳转：用 JS 滚动，不重新加载
-                    js = f'(function(){{var e=document.getElementById("{fragment}");if(e)e.scrollIntoView({{behavior:"smooth"}})}})();'
-                    QTimer.singleShot(0, lambda s=js: self._win.view.page().runJavaScript(s))
-                    return False
-                # 所有本地文件链接都通过 load_file 加载，确保历史栈记录
-                QTimer.singleShot(0, lambda p=path: self._win.load_file(p))
-                return False
-            if url.scheme() in ('http', 'https'):
-                QTimer.singleShot(0, lambda u=url: QDesktopServices.openUrl(u))
-                return False
-        return True
+#260526 Red MarkdownPage 移入 _init_view 延迟加载，避免模块级导入 QtWebEngine
 
 
 # ── 行号区 ────────────────────────────────────────────────────────────────────
@@ -701,12 +675,16 @@ class TitleBar(QWidget):
 # ── 搜索/替换栏 ───────────────────────────────────────────────────────────────
 
 class SearchBar(QWidget):
-    def __init__(self, view: QWebEngineView, win: 'TypeRedWindow'):
+    def __init__(self, win: 'TypeRedWindow', view=None):
         super().__init__(win)
         self._view   = view
         self._win    = win
         self._editor = None
         self.setVisible(False)
+
+    #260526 Red 延迟创建 QWebEngineView 后注入引用
+    def set_view(self, view):
+        self._view = view
 
         from PySide6.QtWidgets import QLineEdit
         vbox = QVBoxLayout(self)
@@ -767,29 +745,30 @@ class SearchBar(QWidget):
             cur.clearSelection()
             self._editor.setTextCursor(cur)
             self._editor.setFocus()
-        else:
+        elif self._view:
             self._view.findText('')
             self._view.setFocus()
 
     def _search(self, text: str):
         if self._editor:
             self._editor.find(text)
-        else:
+        elif self._view:
             self._view.findText(text)
 
     def _next(self):
         text = self.input.text()
         if self._editor:
             self._editor.find(text)
-        else:
+        elif self._view:
             self._view.findText(text)
 
     def _prev(self):
         from PySide6.QtGui import QTextDocument
+        from PySide6.QtWebEngineCore import QWebEnginePage
         text = self.input.text()
         if self._editor:
             self._editor.find(text, QTextDocument.FindFlag.FindBackward)
-        else:
+        elif self._view:
             self._view.findText(text, QWebEnginePage.FindFlag.FindBackward)
 
     def _replace_one(self):
@@ -963,6 +942,7 @@ class TypeRedWindow(QMainWindow):
         self._current_text    = ''
         self._modified        = False
         self._edit_mode       = False
+        self._restore_last    = ''
         self._app_icon        = app_icon
         self._settings        = QSettings('Red', APP_NAME)
         self._watcher         = QFileSystemWatcher(self)
@@ -999,19 +979,16 @@ class TypeRedWindow(QMainWindow):
         self.editor.apply_theme(self.theme)
         self.editor.setVisible(False)
 
-        self.view = QWebEngineView()
-        self.view.setPage(MarkdownPage(self, self.view))
-        self.view.setAcceptDrops(False)
-        self._drag_filter = DragFilter(self)
-        self.view.installEventFilter(self._drag_filter)
-        self._view_ready = True
+        #260526 Red QWebEngineView 延迟创建——先弹窗，后初始化 WebView
+        self.view = None
+        self._view_placeholder = QLabel('  加载中…', alignment=Qt.AlignCenter)
 
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.setHandleWidth(1)
         self.splitter.addWidget(self.editor)
-        self.splitter.addWidget(self.view)
+        self.splitter.addWidget(self._view_placeholder)
 
-        self.search_bar = SearchBar(self.view, self)
+        self.search_bar = SearchBar(self, self)
         self.search_bar.apply_theme(self.theme)
 
         self.statusBar().setSizeGripEnabled(False)
@@ -1062,10 +1039,6 @@ class TypeRedWindow(QMainWindow):
         self._edge_overlay.raise_()
 
         self._register_shortcuts()
-        if self._initial_file:
-            QTimer.singleShot(0, lambda: self.load_file(self._initial_file))
-        else:
-            QTimer.singleShot(0, self._show_welcome)
 
     def _nav_back(self):
         if self._nav_idx > 0:
@@ -1104,6 +1077,14 @@ class TypeRedWindow(QMainWindow):
 
     def showEvent(self, e):
         super().showEvent(e)
+        #260526 Red 关闭 PyInstaller 启动屏
+        try:
+            import pyi_splash
+            pyi_splash.close()
+        except Exception:
+            pass
+        #260526 Red 窗口已弹出，延迟初始化 QWebEngineView
+        QTimer.singleShot(0, self._init_view)
         # 为无边框窗口加 WS_MINIMIZEBOX，使任务栏图标支持点击最小化/还原切换
         try:
             GWL_STYLE        = -16
@@ -1121,10 +1102,53 @@ class TypeRedWindow(QMainWindow):
             )
         except Exception:
             pass
-        from PySide6.QtWidgets import QWidget as _QW
-        for child in self.view.findChildren(_QW):
-            child.setAcceptDrops(False)
-            child.installEventFilter(self._drag_filter)
+
+    #260526 Red 延迟初始化 QWebEngineView
+    def _init_view(self):
+        from PySide6.QtWebEngineWidgets import QWebEngineView
+        from PySide6.QtWebEngineCore import QWebEnginePage
+        if self.view is not None:
+            return
+        class _Page(QWebEnginePage):
+            def __init__(self, win, parent=None):
+                super().__init__(parent)
+                self._win = win
+            def acceptNavigationRequest(self, url, nav_type, _is_main):
+                if nav_type == QWebEnginePage.NavigationType.NavigationTypeLinkClicked:
+                    path = url.toLocalFile()
+                    if path:
+                        fragment = url.fragment()
+                        if fragment and os.path.normpath(path) == self._win.current_file:
+                            js = f'(function(){{var e=document.getElementById("{fragment}");if(e)e.scrollIntoView({{behavior:"smooth"}})}})();'
+                            QTimer.singleShot(0, lambda s=js: self._win.view.page().runJavaScript(s))
+                            return False
+                        QTimer.singleShot(0, lambda p=path: self._win.load_file(p))
+                        return False
+                    if url.scheme() in ('http', 'https'):
+                        QTimer.singleShot(0, lambda u=url: QDesktopServices.openUrl(u))
+                        return False
+                return True
+        self.view = QWebEngineView()
+        self.view.setPage(_Page(self, self.view))
+        self.view.setAcceptDrops(False)
+        self._drag_filter = DragFilter(self)
+        self.view.installEventFilter(self._drag_filter)
+        self._view_ready = True
+        idx = self.splitter.indexOf(self._view_placeholder)
+        self.splitter.insertWidget(idx, self.view)
+        self._view_placeholder.hide()
+        self._view_placeholder.deleteLater()
+        self._view_placeholder = None
+        self.search_bar.set_view(self.view)
+        #260526 Red 视图就绪后重新渲染：命令行文件 > 恢复文件 > 欢迎页
+        if self._initial_file:
+            self.load_file(self._initial_file)
+        elif self._restore_last:
+            self.load_file(self._restore_last)
+        elif self.current_file:
+            self._update_preview()
+        else:
+            self._show_welcome()
 
     # ── 状态持久化 ────────────────────────────────────────────────────────────
 
@@ -1145,9 +1169,9 @@ class TypeRedWindow(QMainWindow):
             if size.width() < screen.width() * 0.9 and size.height() < screen.height() * 0.9:
                 self.resize(size)
 
-        last = self._settings.value('last_file', '')
-        if not self._initial_file and last and os.path.isfile(last):
-            QTimer.singleShot(50, lambda: self.load_file(last))
+        self._restore_last = self._settings.value('last_file', '')
+        if self._restore_last and not os.path.isfile(self._restore_last):
+            self._restore_last = ''
 
     def _save_state(self):
         self._settings.setValue('theme',     self.theme)
@@ -1367,8 +1391,9 @@ H~2~O（下标）    x^2^（上标）
 *版本 {VERSION} · 作者 Red*
 """
         body, toc = render_markdown(welcome_md)
-        self.view.setHtml(build_page(body, toc, self.theme, APP_NAME),
-                          QUrl(f'file:///{BASE_DIR}/'))
+        if self.view:
+            self.view.setHtml(build_page(body, toc, self.theme, APP_NAME),
+                              QUrl(f'file:///{BASE_DIR}/'))
 
     # ── 文件操作 ──────────────────────────────────────────────────────────────
 
@@ -1550,6 +1575,8 @@ H~2~O（下标）    x^2^（上标）
         if ratio is None:
             return
         self._pending_scroll_ratio = None
+        if not self.view:
+            return
         js = f'''
             var ms = Math.max(0, document.body.scrollHeight - window.innerHeight);
             window.scrollTo(0, ms * {ratio});
@@ -1585,7 +1612,8 @@ H~2~O（下标）    x^2^（上标）
             base_url = QUrl.fromLocalFile(os.path.dirname(self.current_file) + '/')
         else:
             base_url = QUrl(f'file:///{BASE_DIR}/')
-        self.view.setHtml(build_page(body, toc, self.theme, title), base_url)
+        if self.view:
+            self.view.setHtml(build_page(body, toc, self.theme, title), base_url)
         if self._pending_scroll_ratio is not None:
             QTimer.singleShot(120, self._sync_preview_scroll)
 
@@ -1604,7 +1632,7 @@ H~2~O（下标）    x^2^（上标）
             return
         default = os.path.splitext(self.current_file)[0] + '.pdf'
         save_path, _ = QFileDialog.getSaveFileName(self, '导出 PDF', default, 'PDF 文件 (*.pdf)')
-        if save_path:
+        if save_path and self.view:
             self.view.page().printToPdf(save_path)
             self.statusBar().showMessage(f'已导出：{save_path}')
 
