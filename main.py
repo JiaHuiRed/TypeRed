@@ -1,5 +1,5 @@
 # author Red
-# TypeRed — Markdown Reader & Editor v0.5.4
+# TypeRed — Markdown Reader & Editor v0.5.5
 #//#260518 Red 0.3.0 编辑模式/实时预览/Markdown格式快捷键/上下标高亮渲染
 #//#260518 Red 0.3.1 欢迎页详细化/修复代码围栏嵌套渲染/README补全快捷键
 #//#260518 Red 0.3.2 pygments_css缓存/字数统计/编辑模式Ctrl+F指向编辑区
@@ -14,7 +14,7 @@
 #//#260521 Red 0.5.0 行号显示/自动保存30s/TOC拖拽调宽/性能优化(MD复用+渲染缓存)/修复左下角缩放/修复保存触发重载
 #//#260522 Red 0.5.1 修复右侧边缘缩放与WebView滚动条重叠（右侧检测边距缩小至4px）
 #//#260523 Red 0.5.2 修复正文目录锚点无法跳转（JS优先preventDefault + Python同文件fragment检测）
-#//#260526 Red 0.5.4 延迟创建QWebEngineView启动速度优化/PyInstaller启动屏
+#//#260527 Red 0.5.5 保存toast/未保存提醒/搜索大小写全词/性能优化/build.bat修复
 
 import sys
 import os
@@ -30,8 +30,8 @@ from pygments.formatters import HtmlFormatter
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QFileDialog, QLabel, QPushButton, QSizeGrip, QMenu,
-    QPlainTextEdit, QSplitter,
-    QDialog, QSpinBox, QFormLayout, QDialogButtonBox,
+    QPlainTextEdit, QSplitter, QLineEdit,
+    QDialog, QSpinBox, QFormLayout, QDialogButtonBox, QMessageBox,
 )
 from PySide6.QtCore import (
     Qt, QUrl, QPointF, QRectF, QRect, QEvent, QObject,
@@ -40,13 +40,14 @@ from PySide6.QtCore import (
 from PySide6.QtGui import (
     QIcon, QDragEnterEvent, QDropEvent, QKeySequence, QShortcut,
     QPainter, QColor, QPixmap, QFont, QPainterPath, QLinearGradient,
-    QMouseEvent, QAction, QTextCursor, QRegion, QDesktopServices, QMovie,
+    QMouseEvent, QAction, QTextCursor, QTextDocument, QRegion, QDesktopServices, QMovie,
 )
 
-VERSION  = "0.5.4"
+VERSION  = "0.5.5"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 MAX_RECENT = 10
+SUPPORTED_EXTS = ('.md', '.markdown', '.mdown', '.txt')
 
 # ── 主题定义 ──────────────────────────────────────────────────────────────────
 
@@ -157,7 +158,7 @@ def render_markdown(text: str) -> tuple[str, str]:
     return body, toc
 
 
-@lru_cache(maxsize=None)
+@lru_cache(maxsize=8)
 def pygments_css(theme: str) -> str:
     try:
         return HtmlFormatter(style=THEME_PYG.get(theme, 'friendly')).get_style_defs('.codehilite')
@@ -165,15 +166,29 @@ def pygments_css(theme: str) -> str:
         return ''
 
 
+# CSS 启动时一次性读入内存
+_CSS_CACHE: str = ''
+
+def _load_css() -> str:
+    global _CSS_CACHE
+    if not _CSS_CACHE:
+        try:
+            with open(os.path.join(BASE_DIR, 'frontend', 'style.css'), encoding='utf-8') as f:
+                _CSS_CACHE = f.read()
+        except Exception:
+            _CSS_CACHE = ''
+    return _CSS_CACHE
+
+
 def build_page(body: str, toc: str, theme: str, title: str = '') -> str:
-    css_path  = os.path.join(BASE_DIR, 'frontend', 'style.css').replace('\\', '/')
+    css_content = _load_css()
     toc_block = f'<nav id="toc">{toc}</nav><div id="toc-resize"></div>' if toc.strip() else ''
     return f"""<!DOCTYPE html>
 <html class="{theme}">
 <head>
 <meta charset="utf-8">
 <title>{title}</title>
-<link rel="stylesheet" href="file:///{css_path}">
+<style>{css_content}</style>
 <style>{pygments_css(theme)}</style>
 </head>
 <body>
@@ -222,7 +237,6 @@ def build_page(body: str, toc: str, theme: str, title: str = '') -> str:
 # ── 拖拽过滤器 ────────────────────────────────────────────────────────────────
 
 class DragFilter(QObject):
-    _EXTS = ('.md', '.markdown', '.mdown', '.txt')
 
     def __init__(self, win: 'TypeRedWindow'):
         super().__init__(win)
@@ -232,13 +246,13 @@ class DragFilter(QObject):
         t = event.type()
         if t == QEvent.Type.DragEnter:
             for u in event.mimeData().urls():
-                if u.toLocalFile().lower().endswith(self._EXTS):
+                if u.toLocalFile().lower().endswith(SUPPORTED_EXTS):
                     event.acceptProposedAction()
                     return True
         elif t == QEvent.Type.Drop:
             for u in event.mimeData().urls():
                 path = u.toLocalFile()
-                if path.lower().endswith(self._EXTS):
+                if path.lower().endswith(SUPPORTED_EXTS):
                     self._win.load_file(path)
                     return True
         return False
@@ -675,18 +689,21 @@ class TitleBar(QWidget):
 # ── 搜索/替换栏 ───────────────────────────────────────────────────────────────
 
 class SearchBar(QWidget):
+    _TOG_STYLE = """
+        QPushButton {{ background: transparent; color: {fg}; border: 1px solid {border}; border-radius: 4px; font-size: 11px; font-weight: 600; padding: 0; }}
+        QPushButton:hover {{ background: rgba(128,128,128,0.15); }}
+        QPushButton:checked {{ background: rgba(91,124,247,0.25); border-color: rgba(91,124,247,0.7); color: #3a5ad4; }}
+    """
+
     def __init__(self, win: 'TypeRedWindow', view=None):
         super().__init__(win)
         self._view   = view
         self._win    = win
         self._editor = None
+        self._case_sensitive = False
+        self._whole_word = False
         self.setVisible(False)
 
-    #260526 Red 延迟创建 QWebEngineView 后注入引用
-    def set_view(self, view):
-        self._view = view
-
-        from PySide6.QtWidgets import QLineEdit
         vbox = QVBoxLayout(self)
         vbox.setContentsMargins(8, 4, 8, 4)
         vbox.setSpacing(3)
@@ -702,6 +719,23 @@ class SearchBar(QWidget):
         self.input.textChanged.connect(self._search)
         self.input.returnPressed.connect(self._next)
         h1.addWidget(self.input)
+
+        self._btn_case = QPushButton('Aa')
+        self._btn_case.setCheckable(True)
+        self._btn_case.setFixedSize(26, 26)
+        self._btn_case.setToolTip('大小写匹配')
+        self._btn_case.toggled.connect(self._on_toggle_changed)
+        h1.addWidget(self._btn_case)
+
+        self._btn_word = QPushButton('W')
+        self._btn_word.setCheckable(True)
+        self._btn_word.setFixedSize(26, 26)
+        self._btn_word.setToolTip('全词匹配')
+        self._btn_word.toggled.connect(self._on_toggle_changed)
+        h1.addWidget(self._btn_word)
+
+        self._toggle_style()
+
         for label, fn in [('↑', self._prev), ('↓', self._next), ('✕', self.hide_bar)]:
             btn = QPushButton(label)
             btn.setFixedSize(26, 26)
@@ -709,7 +743,7 @@ class SearchBar(QWidget):
             h1.addWidget(btn)
         vbox.addWidget(row1)
 
-        # 替换行（仅编辑模式下展示）
+        # 替换行
         self._replace_row = QWidget()
         h2 = QHBoxLayout(self._replace_row)
         h2.setContentsMargins(0, 0, 0, 0)
@@ -728,6 +762,14 @@ class SearchBar(QWidget):
         h2.addWidget(btn_rep_all)
         self._replace_row.setVisible(False)
         vbox.addWidget(self._replace_row)
+
+    def _toggle_style(self):
+        bg, fg, border, btn_border, _ = THEME_TB[self._win.theme]
+        self._btn_case.setStyleSheet(self._TOG_STYLE.format(fg=fg, border=btn_border))
+        self._btn_word.setStyleSheet(self._TOG_STYLE.format(fg=fg, border=btn_border))
+
+    def set_view(self, view):
+        self._view = view
 
     def set_target(self, editor=None):
         self._editor = editor
@@ -749,27 +791,46 @@ class SearchBar(QWidget):
             self._view.findText('')
             self._view.setFocus()
 
+    def _editor_flags(self):
+        flags = QTextDocument.FindFlag(0)
+        if self._case_sensitive:
+            flags |= QTextDocument.FindFlag.FindCaseSensitively
+        if self._whole_word:
+            flags |= QTextDocument.FindFlag.FindWholeWords
+        return flags
+
+    def _view_flags(self):
+        from PySide6.QtWebEngineCore import QWebEnginePage
+        flags = QWebEnginePage.FindFlag(0)
+        if self._case_sensitive:
+            flags |= QWebEnginePage.FindFlag.FindCaseSensitively
+        return flags
+
+    def _on_toggle_changed(self):
+        self._case_sensitive = self._btn_case.isChecked()
+        self._whole_word = self._btn_word.isChecked()
+        self._search(self.input.text())
+
     def _search(self, text: str):
         if self._editor:
-            self._editor.find(text)
+            self._editor.find(text, self._editor_flags())
         elif self._view:
-            self._view.findText(text)
+            self._view.findText(text, self._view_flags())
 
     def _next(self):
         text = self.input.text()
         if self._editor:
-            self._editor.find(text)
+            self._editor.find(text, self._editor_flags())
         elif self._view:
-            self._view.findText(text)
+            self._view.findText(text, self._view_flags())
 
     def _prev(self):
-        from PySide6.QtGui import QTextDocument
-        from PySide6.QtWebEngineCore import QWebEnginePage
         text = self.input.text()
         if self._editor:
-            self._editor.find(text, QTextDocument.FindFlag.FindBackward)
+            self._editor.find(text, self._editor_flags() | QTextDocument.FindFlag.FindBackward)
         elif self._view:
-            self._view.findText(text, QWebEnginePage.FindFlag.FindBackward)
+            from PySide6.QtWebEngineCore import QWebEnginePage
+            self._view.findText(text, self._view_flags() | QWebEnginePage.FindFlag.FindBackward)
 
     def _replace_one(self):
         if not self._editor:
@@ -824,12 +885,48 @@ class SearchBar(QWidget):
             }}
             QPushButton:hover {{ background: rgba(128,128,128,0.15); }}
         """)
+        self._toggle_style()
 
     def keyPressEvent(self, e):
         if e.key() == Qt.Key_Escape:
             self.hide_bar()
         else:
             super().keyPressEvent(e)
+
+
+# ── Toast 提示 ────────────────────────────────────────────────────────────────
+
+class Toast(QLabel):
+    """轻量级 toast 弹窗，2 秒后自动消失。"""
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setFixedHeight(32)
+        self.setAlignment(Qt.AlignCenter)
+        self.setStyleSheet("""
+            QLabel {
+                background: rgba(40, 40, 40, 0.88);
+                color: #fff;
+                border-radius: 6px;
+                padding: 0 18px;
+                font-size: 12px;
+            }
+        """)
+        self.hide()
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self.hide)
+
+    def show_message(self, text: str, duration: int = 2000):
+        self.setText(text)
+        self.adjustSize()
+        pw = self.parentWidget()
+        if pw:
+            x = (pw.width() - self.width()) // 2
+            y = pw.height() - self.height() - 40
+            self.move(x, y)
+        self.show()
+        self.raise_()
+        self._timer.start(duration)
 
 
 # ── 边缘缩放覆盖层（纯 Qt，不依赖 Windows API） ──────────────────────────────
@@ -943,6 +1040,7 @@ class TypeRedWindow(QMainWindow):
         self._modified        = False
         self._edit_mode       = False
         self._restore_last    = ''
+        self._cached_text     = ''
         self._app_icon        = app_icon
         self._settings        = QSettings('Red', APP_NAME)
         self._watcher         = QFileSystemWatcher(self)
@@ -956,6 +1054,11 @@ class TypeRedWindow(QMainWindow):
         self._autosave_timer.setInterval(30_000)
         self._autosave_timer.timeout.connect(self._autosave)
         self._autosave_timer.start()
+
+        self._status_timer = QTimer(self)
+        self._status_timer.setSingleShot(True)
+        self._status_timer.setInterval(200)
+        self._status_timer.timeout.connect(self._update_status_bar)
 
         self._build_ui()
         self._restore_state()
@@ -1037,6 +1140,9 @@ class TypeRedWindow(QMainWindow):
         self._edge_overlay.setGeometry(self.rect())
         self._edge_overlay.show()
         self._edge_overlay.raise_()
+
+        # Toast 提示
+        self._toast = Toast(central)
 
         self._register_shortcuts()
 
@@ -1185,6 +1291,21 @@ class TypeRedWindow(QMainWindow):
         self._settings.setValue('last_file', self.current_file)
 
     def closeEvent(self, e):
+        if self._modified:
+            ret = QMessageBox.question(
+                self, '未保存的更改',
+                '当前文件有未保存的更改，是否保存？',
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+                QMessageBox.Save,
+            )
+            if ret == QMessageBox.Save:
+                self.save_file()
+                if self._modified:
+                    e.ignore()
+                    return
+            elif ret == QMessageBox.Cancel:
+                e.ignore()
+                return
         self._save_state()
         super().closeEvent(e)
 
@@ -1410,6 +1531,20 @@ H~2~O（下标）    x^2^（上标）
         if not os.path.isfile(path):
             self.statusBar().showMessage(f'文件不存在：{path}')
             return
+        # 切换文件前检查未保存更改
+        if self._modified:
+            ret = QMessageBox.question(
+                self, '未保存的更改',
+                '当前文件有未保存的更改，是否保存？',
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+                QMessageBox.Save,
+            )
+            if ret == QMessageBox.Save:
+                self.save_file()
+                if self._modified:
+                    return
+            elif ret == QMessageBox.Cancel:
+                return
         try:
             with open(path, encoding='utf-8-sig') as f:
                 text = f.read()
@@ -1451,13 +1586,8 @@ H~2~O（下标）    x^2^（上标）
             return
         # 无当前文件则另存为
         if not self.current_file:
-            path, _ = QFileDialog.getSaveFileName(
-                self, '保存文件', 'untitled.md', 'Markdown 文件 (*.md)'
-            )
-            if not path:
-                return
-            self.current_file = path
-            self._watcher.addPath(path)
+            self._save_as_file()
+            return
         text = self.editor.toPlainText()
         try:
             self._watcher.removePath(self.current_file)
@@ -1472,6 +1602,31 @@ H~2~O（下标）    x^2^（上标）
         self._modified     = False
         self._update_title()
         self.statusBar().showMessage(f'已保存：{self.current_file}')
+        self._toast.show_message(f'已保存：{os.path.basename(self.current_file)}')
+
+    def _save_as_file(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, '另存为', self.current_file or 'untitled.md', 'Markdown 文件 (*.md)'
+        )
+        if not path:
+            return False
+        self.current_file = path
+        if path not in self._watcher.files():
+            self._watcher.addPath(path)
+        text = self.editor.toPlainText()
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(text)
+        except Exception as ex:
+            self.statusBar().showMessage(f'保存失败：{ex}')
+            return False
+        self._current_text = text
+        self._modified     = False
+        self._update_title()
+        self._add_recent(path)
+        self.statusBar().showMessage(f'已保存：{path}')
+        self._toast.show_message(f'已保存：{os.path.basename(path)}')
+        return True
 
     def _reload_from_disk(self):
         if self.current_file:
@@ -1564,7 +1719,14 @@ H~2~O（下标）    x^2^（上标）
             self._modified = True
             self._update_title()
         self._preview_timer.start()
-        text  = self.editor.toPlainText()
+        # 缓存 toPlainText 避免 _update_preview 重复调用
+        self._cached_text = self.editor.toPlainText()
+        self._status_timer.start()
+
+    def _update_status_bar(self):
+        text = getattr(self, '_cached_text', '')
+        if not text:
+            return
         chars = len(text)
         words = len(text.split()) if text.strip() else 0
         lines = self.editor.blockCount()
@@ -1586,7 +1748,7 @@ H~2~O（下标）    x^2^（上标）
     def _sync_preview_from_cursor(self):
         if not self._edit_mode:
             return
-        text = self.editor.toPlainText()
+        text = getattr(self, '_cached_text', '') or self.editor.toPlainText()
         if not text:
             return
         ratio = self.editor.textCursor().position() / max(len(text), 1)
@@ -1594,11 +1756,15 @@ H~2~O（下标）    x^2^（上标）
         QTimer.singleShot(50, self._sync_preview_scroll)
 
     def _update_preview(self):
-        text = self.editor.toPlainText() if self._edit_mode else self._current_text
+        if self._edit_mode:
+            text = getattr(self, '_cached_text', '') or self.editor.toPlainText()
+        else:
+            text = self._current_text
         if not text and not self.current_file:
             return
         title = os.path.basename(self.current_file) if self.current_file else APP_NAME
-        key = (self.theme, title, text)
+        # 用 hash 代替全文比较，O(1) 而非 O(n)
+        key = (self.theme, title, hash(text))
         if key == getattr(self, '_last_render_key', None):
             self._sync_preview_from_cursor()
             return
@@ -1607,13 +1773,21 @@ H~2~O（下标）    x^2^（上标）
             self._pending_scroll_ratio = self.editor.textCursor().position() / max(len(text), 1)
         else:
             self._pending_scroll_ratio = None
-        body, toc = render_markdown(text)
+        try:
+            body, toc = render_markdown(text)
+        except Exception as ex:
+            self.statusBar().showMessage(f'渲染失败：{ex}')
+            return
         if self.current_file:
             base_url = QUrl.fromLocalFile(os.path.dirname(self.current_file) + '/')
         else:
             base_url = QUrl(f'file:///{BASE_DIR}/')
         if self.view:
-            self.view.setHtml(build_page(body, toc, self.theme, title), base_url)
+            try:
+                self.view.setHtml(build_page(body, toc, self.theme, title), base_url)
+            except Exception as ex:
+                self.statusBar().showMessage(f'渲染失败：{ex}')
+                return
         if self._pending_scroll_ratio is not None:
             QTimer.singleShot(120, self._sync_preview_scroll)
 
@@ -1663,14 +1837,14 @@ H~2~O（下标）    x^2^（上标）
     def dragEnterEvent(self, event: QDragEnterEvent):
         if event.mimeData().hasUrls():
             for u in event.mimeData().urls():
-                if u.toLocalFile().lower().endswith(('.md', '.markdown', '.mdown', '.txt')):
+                if u.toLocalFile().lower().endswith(SUPPORTED_EXTS):
                     event.acceptProposedAction()
                     return
 
     def dropEvent(self, event: QDropEvent):
         for u in event.mimeData().urls():
             path = u.toLocalFile()
-            if path.lower().endswith(('.md', '.markdown', '.mdown', '.txt')):
+            if path.lower().endswith(SUPPORTED_EXTS):
                 self.load_file(path)
                 break
 

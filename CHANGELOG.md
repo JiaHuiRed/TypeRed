@@ -7,6 +7,33 @@
 
 ---
 
+## [0.5.5] - 2026-05-27
+
+### 新增
+
+- **搜索大小写/全词匹配**：搜索栏新增 `Aa`（大小写）和 `W`（全词）切换按钮
+- **保存成功 Toast 弹窗**：`Ctrl+S` 保存后在窗口底部居中弹出轻量提示，2 秒自动消失
+- **未保存更改提醒**：关闭窗口或切换文件时，若存在未保存更改则弹出 保存/放弃/取消 对话框，防止数据丢失
+
+### 优化
+
+- **按键性能优化**：`_on_editor_changed` 中缓存 `toPlainText()`，`_update_preview` 和 `_sync_preview_from_cursor` 复用，避免每次按键双重调用；字数统计改为 200ms 防抖，大文档不再卡顿
+- **渲染缓存 key 优化**：用 `hash(text)` 代替全文比较，O(n) → O(1)
+- **CSS 启动时读入内存**：`build_page` 将 CSS 内联注入 `<style>`，消除每次渲染时的磁盘 I/O
+- **渲染异常保护**：`render_markdown` 失败时捕获异常并在状态栏提示，而非直接闪退
+
+### 修复
+
+- **修复 build.bat 打包缺失猫猫 GIF**：`--add-data` 补充 `mona-loading.gif`，`>/dev/null` 修正为 `>nul`（Windows 无效路径）
+- **style.css 中文注释乱码**：重新保存为正确 UTF-8 编码
+
+### 重构
+
+- **文件扩展名提取为常量**：`SUPPORTED_EXTS` 统一定义，消除 `DragFilter` / 拖拽事件中 3 处重复
+- **pillow 移至构建依赖**：`requirements.txt` 中去掉 pillow（仅 `make_icon.py` / `make_splash.py` 需要，运行时不需要）
+
+---
+
 ## [0.5.4] - 2026-05-26
 
 ### 优化
