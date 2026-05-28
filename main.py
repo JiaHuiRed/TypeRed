@@ -1144,6 +1144,12 @@ class TypeRedWindow(QMainWindow):
         # Toast 提示
         self._toast = Toast(central)
 
+        self._loading_overlay = QLabel(' Rendering... ', central)
+        self._loading_overlay.setAlignment(Qt.AlignCenter)
+        self._loading_overlay.setStyleSheet('QLabel{background:#f0f0f0;color:#888;font-size:11px;border:1px solid #d0d0d0;border-radius:3px;padding:2px 8px}')
+        self._loading_overlay.adjustSize()
+        self._loading_overlay.hide()
+
         self._register_shortcuts()
 
     def _nav_back(self):
@@ -1773,11 +1779,18 @@ H~2~O（下标）    x^2^（上标）
             self._pending_scroll_ratio = self.editor.textCursor().position() / max(len(text), 1)
         else:
             self._pending_scroll_ratio = None
+        self._loading_overlay.move(self._loading_overlay.parent().width() - self._loading_overlay.width() - 20, 50)
+        self._loading_overlay.show()
+        self._loading_overlay.raise_()
+        self._loading_overlay.repaint()
+
         try:
             body, toc = render_markdown(text)
         except Exception as ex:
+            self._loading_overlay.hide()
             self.statusBar().showMessage(f'渲染失败：{ex}')
             return
+        self._loading_overlay.hide()
         if self.current_file:
             base_url = QUrl.fromLocalFile(os.path.dirname(self.current_file) + '/')
         else:
