@@ -355,3 +355,40 @@ html.cream    #content mark { background: #f5d080; color: #2c1f0a; }
 #layout:not(:has(#toc)) #content {
   padding-left: 48px;
 }
+
+/* ── 思维导图模式 ── */
+.mindmap #content h1 {
+  text-align: center;
+  font-size: 1.6em;
+  border-bottom: 2px dashed var(--border);
+  padding-bottom: 0.4em;
+}
+.mindmap #content h2 {
+  font-size: 1.5em;
+  margin-top: 2em;
+  padding-left: 16px;
+  border-left: 4px solid var(--link);
+  background: var(--code-bg);
+  border-radius: 0 6px 6px 0;
+}
+.mindmap #content h3 {
+  font-size: 1.2em;
+  padding-left: 32px;
+  border-left: 3px solid #7aa2f7;
+  margin-top: 1.5em;
+}
+.mindmap #content h4 {
+  font-size: 1.05em;
+  padding-left: 48px;
+  border-left: 2px solid #9ece6a;
+  color: var(--text-muted);
+  margin-top: 1.2em;
+}
+.mindmap #content h5,
+.mindmap #content h6 {
+  font-size: 0.95em;
+  padding-left: 64px;
+  border-left: 1px solid var(--border);
+  color: var(--text-muted);
+  margin-top: 1em;
+}

@@ -1,5 +1,5 @@
 # author Red
-# TypeRed — Markdown Reader & Editor v0.6.0
+# TypeRed — Markdown Reader & Editor v0.6.1
 #//#260518 Red 0.3.0 编辑模式/实时预览/Markdown格式快捷键/上下标高亮渲染
 #//#260518 Red 0.3.1 欢迎页详细化/修复代码围栏嵌套渲染/README补全快捷键
 #//#260518 Red 0.3.2 pygments_css缓存/字数统计/编辑模式Ctrl+F指向编辑区
@@ -17,7 +17,7 @@
 #//#260527 Red 0.5.5 保存toast/未保存提醒/搜索大小写全词/性能优化/build.bat修复
 #//#260528 Red 0.5.6 提取JS和欢迎页到frontend/、文件监听器去重
 #//#260601 Red 0.6.0 mistune 替换 markdown 渲染引擎 / 自定义 TOC + 代码高亮渲染器
-#//#260601 Red 0.6.0 支持打开 .xmind 思维导图文件（自动解析为Markdown渲染）
+#//#260601 Red 0.6.1 支持打开 .xmind 思维导图文件（Zen JSON + 旧版 XML 格式）/ 思维导图模式CSS
 
 import sys
 import os
@@ -48,7 +48,7 @@ from PySide6.QtGui import (
     QMouseEvent, QAction, QTextCursor, QTextDocument, QRegion, QDesktopServices, QMovie,
 )
 
-VERSION  = "0.6.0"
+VERSION  = "0.6.1"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 MAX_RECENT = 10
@@ -212,12 +212,15 @@ def pygments_css(theme: str) -> str:
 # ── XMind 思维导图解析 ─────────────────────────────────────────────────────────
 
 def _xmind_to_markdown(path: str) -> str:
-    import zipfile, json
+    import zipfile, json, xml.etree.ElementTree as ET
     try:
         with zipfile.ZipFile(path) as zf:
             if 'content.json' in zf.namelist():
                 data = json.loads(zf.read('content.json'))
                 return _xmind_zen_to_md(data)
+            if 'content.xml' in zf.namelist():
+                tree = ET.parse(zf.open('content.xml'))
+                return _xmind_8_to_md(tree)
     except Exception:
         return ''
     return ''
@@ -242,6 +245,29 @@ def _xmind_topic(lines: list, topic: dict, level: int, sheet_title: str = ''):
     children = topic.get('children', {}).get('attached', [])
     for child in children:
         _xmind_topic(lines, child, level + 1)
+
+def _xmind_8_to_md(tree) -> str:
+    ns = {'x': 'urn:xmind:xmap:xmlns:content:2.0'}
+    lines = [f'# {APP_NAME} — XMind 思维导图\n']
+    for sheet in tree.findall('.//x:sheet', ns):
+        title_el = sheet.find('x:title', ns)
+        title = title_el.text.strip() if title_el is not None and title_el.text else ''
+        if title:
+            lines.append(f'## {title}\n')
+        topic = sheet.find('x:topic', ns)
+        if topic is not None:
+            _xmind_xml_topic(topic, lines, 3, ns)
+    return '\n'.join(lines)
+
+def _xmind_xml_topic(topic, lines: list, level: int, ns: dict):
+    title_el = topic.find('x:title', ns)
+    title = title_el.text.strip() if title_el is not None and title_el.text else ''
+    if title:
+        marker = '#' * min(level, 6)
+        lines.append(f'{marker} {title}')
+        lines.append('')
+    for child in topic.findall('x:children/x:topics/x:topic', ns):
+        _xmind_xml_topic(child, lines, level + 1, ns)
 
 
 # 资源文件启动时一次性读入内存
@@ -269,12 +295,13 @@ def _load_js() -> str:
     return _JS_CACHE
 
 
-def build_page(body: str, toc: str, theme: str, title: str = '') -> str:
+def build_page(body: str, toc: str, theme: str, title: str = '', is_xmind: bool = False) -> str:
     css_content = _load_css()
     js_content = _load_js()
     toc_block = f'<nav id="toc">{toc}</nav><div id="toc-resize"></div>' if toc.strip() else ''
+    extra_class = f' mindmap' if is_xmind else ''
     return f"""<!DOCTYPE html>
-<html class="{theme}">
+<html class="{theme}{extra_class}">
 <head>
 <meta charset="utf-8">
 <title>{title}</title>
@@ -1757,7 +1784,7 @@ class TypeRedWindow(QMainWindow):
             base_url = QUrl(f'file:///{BASE_DIR}/')
         if self.view:
             try:
-                self.view.setHtml(build_page(body, toc, self.theme, title), base_url)
+                self.view.setHtml(build_page(body, toc, self.theme, title, is_xmind=self._is_xmind), base_url)
             except Exception as ex:
                 self.statusBar().showMessage(f'渲染失败：{ex}')
                 return
