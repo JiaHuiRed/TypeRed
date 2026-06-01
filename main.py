@@ -1199,8 +1199,8 @@ class TypeRedWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self.titlebar)
-        layout.addWidget(self.splitter, 1)
         layout.addWidget(self.search_bar)
+        layout.addWidget(self.splitter, 1)
         self.setCentralWidget(central)
 
         #260525 Red 左侧猫猫（阅读/编辑模式都可见）
