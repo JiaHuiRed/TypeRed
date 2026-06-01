@@ -1,5 +1,5 @@
 # author Red
-# TypeRed — Markdown Reader & Editor v0.6.1
+# TypeRed — Markdown Reader & Editor v0.6.4
 #//#260518 Red 0.3.0 编辑模式/实时预览/Markdown格式快捷键/上下标高亮渲染
 #//#260518 Red 0.3.1 欢迎页详细化/修复代码围栏嵌套渲染/README补全快捷键
 #//#260518 Red 0.3.2 pygments_css缓存/字数统计/编辑模式Ctrl+F指向编辑区
@@ -14,7 +14,7 @@
 #//#260521 Red 0.5.0 行号显示/自动保存30s/TOC拖拽调宽/性能优化(MD复用+渲染缓存)/修复左下角缩放/修复保存触发重载
 #//#260522 Red 0.5.1 修复右侧边缘缩放与WebView滚动条重叠（右侧检测边距缩小至4px）
 #//#260523 Red 0.5.2 修复正文目录锚点无法跳转（JS优先preventDefault + Python同文件fragment检测）
-#//#260527 Red 0.5.5 保存toast/未保存提醒/搜索大小写全词/性能优化/build.bat修复
+#//#260601 Red 0.6.4 修复mistune HTML标签转义问题
 #//#260528 Red 0.5.6 提取JS和欢迎页到frontend/、文件监听器去重
 #//#260601 Red 0.6.0 mistune 替换 markdown 渲染引擎 / 自定义 TOC + 代码高亮渲染器
 #//#260601 Red 0.6.1 支持打开 .xmind 思维导图文件（Zen JSON + 旧版 XML 格式）/ 思维导图模式CSS
@@ -49,7 +49,7 @@ from PySide6.QtGui import (
     QMouseEvent, QAction, QTextCursor, QTextDocument, QRegion, QDesktopServices, QMovie,
 )
 
-VERSION  = "0.6.2"
+VERSION  = "0.6.4"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 MAX_RECENT = 10

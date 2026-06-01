@@ -7,6 +7,14 @@
 
 ---
 
+## [0.6.4] - 2026-06-01
+
+### 修复
+
+- **HTML 标签被 mistune 转义**：`TypeRedRenderer` 传入 `escape=False`，修复 `<details>` / `<summary>` 等原生 HTML 标签被误转为 `&lt;` 导致折叠功能失效
+
+---
+
 ## [0.6.3] - 2026-06-01
 
 ### 修复
