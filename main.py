@@ -17,6 +17,7 @@
 #//#260527 Red 0.5.5 保存toast/未保存提醒/搜索大小写全词/性能优化/build.bat修复
 #//#260528 Red 0.5.6 提取JS和欢迎页到frontend/、文件监听器去重
 #//#260601 Red 0.6.0 mistune 替换 markdown 渲染引擎 / 自定义 TOC + 代码高亮渲染器
+#//#260601 Red 0.6.0 支持打开 .xmind 思维导图文件（自动解析为Markdown渲染）
 
 import sys
 import os
@@ -51,7 +52,7 @@ VERSION  = "0.6.0"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 MAX_RECENT = 10
-SUPPORTED_EXTS = ('.md', '.markdown', '.mdown', '.txt')
+SUPPORTED_EXTS = ('.md', '.markdown', '.mdown', '.txt', '.xmind')
 
 # ── 主题定义 ──────────────────────────────────────────────────────────────────
 
@@ -206,6 +207,41 @@ def pygments_css(theme: str) -> str:
         return HtmlFormatter(style=THEME_PYG.get(theme, 'friendly')).get_style_defs('.codehilite')
     except Exception:
         return ''
+
+
+# ── XMind 思维导图解析 ─────────────────────────────────────────────────────────
+
+def _xmind_to_markdown(path: str) -> str:
+    import zipfile, json
+    try:
+        with zipfile.ZipFile(path) as zf:
+            if 'content.json' in zf.namelist():
+                data = json.loads(zf.read('content.json'))
+                return _xmind_zen_to_md(data)
+    except Exception:
+        return ''
+    return ''
+
+def _xmind_zen_to_md(data: list) -> str:
+    lines = [f'# {APP_NAME} — XMind 思维导图\n']
+    for sheet in data:
+        root = sheet.get('rootTopic', {})
+        _xmind_topic(lines, root, 2, sheet.get('title'))
+    return '\n'.join(lines)
+
+def _xmind_topic(lines: list, topic: dict, level: int, sheet_title: str = ''):
+    title = topic.get('title', '').strip()
+    note = topic.get('notes', {}).get('plain', {}).get('content', '').strip()
+    if title:
+        marker = '#' * min(level, 6)
+        lines.append(f'{marker} {title}')
+        if note:
+            for p in note.split('\n'):
+                lines.append(f'> {p}')
+        lines.append('')
+    children = topic.get('children', {}).get('attached', [])
+    for child in children:
+        _xmind_topic(lines, child, level + 1)
 
 
 # 资源文件启动时一次性读入内存
@@ -1062,6 +1098,7 @@ class TypeRedWindow(QMainWindow):
         self._edit_mode       = False
         self._restore_last    = ''
         self._cached_text     = ''
+        self._is_xmind        = False
         self._app_icon        = app_icon
         self._settings        = QSettings('Red', APP_NAME)
         self._watcher         = QFileSystemWatcher(self)
@@ -1440,8 +1477,8 @@ class TypeRedWindow(QMainWindow):
 
     def open_file_dialog(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, '打开 Markdown 文件', '',
-            'Markdown 文件 (*.md *.markdown *.mdown *.txt)'
+            self, '打开 Markdown / XMind 文件', '',
+            'Markdown / XMind 文件 (*.md *.markdown *.mdown *.txt *.xmind)'
         )
         if path:
             self.load_file(path)
@@ -1465,15 +1502,24 @@ class TypeRedWindow(QMainWindow):
                     return
             elif ret == QMessageBox.Cancel:
                 return
-        try:
-            with open(path, encoding='utf-8-sig') as f:
-                text = f.read()
-        except UnicodeDecodeError:
-            with open(path, encoding='gbk', errors='replace') as f:
-                text = f.read()
+        ext = os.path.splitext(path)[1].lower()
+        if ext == '.xmind':
+            text = _xmind_to_markdown(path)
+            if not text:
+                self.statusBar().showMessage('无法解析 XMind 文件')
+                return
+            self._is_xmind = True
+        else:
+            try:
+                with open(path, encoding='utf-8-sig') as f:
+                    text = f.read()
+            except UnicodeDecodeError:
+                with open(path, encoding='gbk', errors='replace') as f:
+                    text = f.read()
+            self._is_xmind = False
 
         self._suspend_watcher()
-        if path not in self._watcher.files():
+        if path not in self._watcher.files() and not self._is_xmind:
             self._watcher.addPath(path)
 
         self.current_file  = path
@@ -1496,8 +1542,9 @@ class TypeRedWindow(QMainWindow):
         self._add_recent(path)
 
         size_kb = max(1, os.path.getsize(path) // 1024)
+        fmt = 'XMind' if self._is_xmind else 'Markdown'
         self.statusBar().showMessage(
-            f'{path}  |  {text.count(chr(10)) + 1} 行  |  {size_kb} KB'
+            f'{path}  |  {fmt}  |  {text.count(chr(10)) + 1} 行  |  {size_kb} KB'
         )
 
     def save_file(self):

@@ -22,7 +22,7 @@ TypeRed 是一个轻量级本地 Markdown 阅读 / 编辑器，基于 PySide6 + 
 
 ## ✨ 功能
 
-- 📂 打开 / 拖拽 `.md` / `.markdown` / `.mdown` / `.txt` 文件
+- 📂 打开 / 拖拽 `.md` / `.markdown` / `.mdown` / `.txt` / `.xmind` 文件
 - 🎨 5 种主题：默认 / 护眼 / 米黄 / 深蓝 / 夜间
 - 🌲 自动生成目录（左侧可点击跳转）
 - 💻 代码块语法高亮（Pygments）
