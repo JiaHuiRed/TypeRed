@@ -99,6 +99,7 @@ html, body {
 }
 
 /* ── TOC 侧边栏 ── */
+/* #260601 Red 0.6.2 半透明渐变 + 阴影 */
 #toc {
   position: sticky;
   top: 0;
@@ -113,6 +114,22 @@ html, body {
   font-size: 13px;
   line-height: 1.6;
   flex-shrink: 0;
+  transition: background 0.3s ease;
+}
+html.dark #toc,
+html.night #toc {
+  background: color-mix(in srgb, var(--bg-sidebar) 82%, transparent);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  box-shadow: 1px 0 8px rgba(0,0,0,0.12);
+}
+html.light #toc,
+html.eye-care #toc,
+html.cream #toc {
+  background: color-mix(in srgb, var(--bg-sidebar) 86%, transparent);
+  backdrop-filter: blur(12px) saturate(150%);
+  -webkit-backdrop-filter: blur(12px) saturate(150%);
+  box-shadow: 1px 0 6px rgba(0,0,0,0.04);
 }
 
 #toc::before {
@@ -324,18 +341,25 @@ html.cream    #content mark { background: #f5d080; color: #2c1f0a; }
 
 /* ── 滚动条 ── */
 /* ── 260525 Red macOS 风格滚动条：细、半透明、hover 显色 ── */
-::-webkit-scrollbar       { width: 4px; height: 4px; }
+/* #260601 Red 0.6.2 4px→6px / 毛玻璃 / 平滑过渡 */
+::-webkit-scrollbar       { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
   background: color-mix(in srgb, var(--scrollbar) 30%, transparent);
-  border-radius: 2px;
-  transition: background 0.2s;
+  border-radius: 3px;
+  transition: background 0.3s ease;
 }
 ::-webkit-scrollbar-thumb:hover {
   background: color-mix(in srgb, var(--scrollbar) 70%, transparent);
 }
 ::-webkit-scrollbar-thumb:active {
   background: color-mix(in srgb, var(--scrollbar) 90%, transparent);
+}
+
+/* ── 毛玻璃通用 ── */
+.glass {
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
 }
 
 /* ── TOC 拖拽分隔线 ── */

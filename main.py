@@ -18,6 +18,7 @@
 #//#260528 Red 0.5.6 提取JS和欢迎页到frontend/、文件监听器去重
 #//#260601 Red 0.6.0 mistune 替换 markdown 渲染引擎 / 自定义 TOC + 代码高亮渲染器
 #//#260601 Red 0.6.1 支持打开 .xmind 思维导图文件（Zen JSON + 旧版 XML 格式）/ 思维导图模式CSS
+#//#260601 Red 0.6.2 真毛玻璃：WA_TranslucentBackground + paintEvent半透明背景 + 标题栏/搜索栏/状态栏透明
 
 import sys
 import os
@@ -48,7 +49,7 @@ from PySide6.QtGui import (
     QMouseEvent, QAction, QTextCursor, QTextDocument, QRegion, QDesktopServices, QMovie,
 )
 
-VERSION  = "0.6.1"
+VERSION  = "0.6.2"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 MAX_RECENT = 10
@@ -686,22 +687,22 @@ class TitleBar(QWidget):
         self.icon_lbl.setPixmap(icon.pixmap(18, 18))
 
     def apply_theme(self, theme: str):
-        # 标题栏固定中性风格，不随内容主题变化
+        # #260601 Red 0.6.2 标题栏透明，桌面穿透
         self.setStyleSheet("""
-            TitleBar { background: #f0f0f0; border-bottom: 1px solid #d0d0d0; }
+            TitleBar { background: transparent; border-bottom: 1px solid rgba(200,200,200,0.3); }
             #tb_title { color: #2a2a2a; font-size: 13px; font-weight: 600; }
         """)
         self._btn_normal_style = """
             QPushButton {
-                background: #f0f0f0;
+                background: transparent;
                 color: #2a2a2a;
-                border: 1px solid #c0c0c0;
+                border: 1px solid rgba(192,192,192,0.3);
                 border-radius: 5px;
                 font-size: 12px;
                 font-weight: 500;
             }
-            QPushButton:hover   { background: #e0e0e0; }
-            QPushButton:pressed { background: #d0d0d0; }
+            QPushButton:hover   { background: rgba(255,255,255,0.3); }
+            QPushButton:pressed { background: rgba(200,200,200,0.4); }
         """
         for btn in (self.btn_edit, self.btn_recent, self.btn_open):
             btn.setStyleSheet(self._btn_normal_style)
@@ -945,19 +946,24 @@ class SearchBar(QWidget):
         self._win.statusBar().showMessage(f'已替换 {count} 处')
 
     def apply_theme(self, theme: str):
+        # #260601 Red 0.6.2 搜索栏透明，桌面穿透
         bg, fg, border, btn_border, _ = THEME_TB[theme]
         self.setStyleSheet(f"""
             SearchBar {{
-                background: {bg};
-                border-top: 1px solid {border};
+                background: transparent;
+                border-top: 1px solid rgba(200,200,200,0.3);
             }}
             QLineEdit {{
-                background: rgba(128,128,128,0.12);
+                background: rgba(255,255,255,0.15);
                 color: {fg};
                 border: 1px solid {btn_border};
                 border-radius: 4px;
                 padding: 0 6px;
                 font-size: 13px;
+            }}
+            QLineEdit:focus {{
+                background: rgba(255,255,255,0.25);
+                border-color: {btn_border};
             }}
             QPushButton {{
                 background: transparent;
@@ -967,7 +973,7 @@ class SearchBar(QWidget):
                 font-size: 12px;
                 padding: 0 8px;
             }}
-            QPushButton:hover {{ background: rgba(128,128,128,0.15); }}
+            QPushButton:hover {{ background: rgba(255,255,255,0.2); }}
         """)
         self._toggle_style()
 
@@ -986,10 +992,13 @@ class Toast(QLabel):
         super().__init__(parent)
         self.setFixedHeight(32)
         self.setAlignment(Qt.AlignCenter)
+        # #260601 Red 0.6.2 Toast 半透明渐变
         self.setStyleSheet("""
             QLabel {
-                background: rgba(40, 40, 40, 0.88);
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(50,50,50,0.82), stop:1 rgba(35,35,35,0.78));
                 color: #fff;
+                border: 1px solid rgba(255,255,255,0.08);
                 border-radius: 6px;
                 padding: 0 18px;
                 font-size: 12px;
@@ -1153,6 +1162,7 @@ class TypeRedWindow(QMainWindow):
 
     def _build_ui(self):
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.resize(900, 640)
         self.setMinimumSize(640, 420)
         self.setWindowTitle(APP_NAME)
@@ -1181,6 +1191,7 @@ class TypeRedWindow(QMainWindow):
 
         self.statusBar().setSizeGripEnabled(False)
         self.statusBar().addPermanentWidget(QSizeGrip(self))
+        self.statusBar().setStyleSheet("QStatusBar{background:transparent;}")
         self.statusBar().showMessage(f'{APP_NAME} v{VERSION}  |  拖入 .md 文件或点击「打开」')
 
         central = QWidget()
@@ -1229,9 +1240,20 @@ class TypeRedWindow(QMainWindow):
         # Toast 提示
         self._toast = Toast(central)
 
+        # #260601 Red 0.6.2 Loading 半透明渐变
         self._loading_overlay = QLabel(' Rendering... ', central)
         self._loading_overlay.setAlignment(Qt.AlignCenter)
-        self._loading_overlay.setStyleSheet('QLabel{background:#f0f0f0;color:#888;font-size:11px;border:1px solid #d0d0d0;border-radius:3px;padding:2px 8px}')
+        self._loading_overlay.setStyleSheet("""
+            QLabel {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(248,248,248,0.88), stop:1 rgba(238,238,238,0.84));
+                color: #888;
+                font-size: 11px;
+                border: 1px solid rgba(200,200,200,0.5);
+                border-radius: 4px;
+                padding: 2px 8px;
+            }
+        """)
         self._loading_overlay.adjustSize()
         self._loading_overlay.hide()
 
@@ -1266,6 +1288,18 @@ class TypeRedWindow(QMainWindow):
         else:
             x = 8
         self._cat_label.move(x, cw.height() - self._cat_label.height() - 8)
+
+    # #260601 Red 0.6.2 真毛玻璃：半透明背景让桌面穿透
+    def paintEvent(self, e):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        if self.theme in ('dark', 'night'):
+            painter.setBrush(QColor(30, 30, 35, 200))
+        else:
+            painter.setBrush(QColor(245, 245, 245, 210))
+        painter.setPen(Qt.NoPen)
+        painter.drawRect(self.rect())
+        painter.end()
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
