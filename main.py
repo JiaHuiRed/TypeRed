@@ -129,7 +129,7 @@ def make_app_icon() -> QIcon:
 
 class TypeRedRenderer(mistune.HTMLRenderer):
     def __init__(self):
-        super().__init__()
+        super().__init__(escape=False)
         self.toc_entries: list[tuple[int, str, str]] = []
 
     def reset_toc(self):
