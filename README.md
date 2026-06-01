@@ -1,6 +1,6 @@
 # 📝 TypeRed — Markdown Reader & Editor
 
-[![GitHub Tag](https://img.shields.io/github/v/tag/JiaHuiRed/TypeRed?label=版本&color=blue&logo=github)](CHANGELOG.md)
+[![GitHub Release](https://img.shields.io/github/v/release/JiaHuiRed/TypeRed?label=版本&color=blue&logo=github)](CHANGELOG.md)
 [![平台](https://img.shields.io/badge/平台-Windows%2010%2F11-0078d7?logo=windows&logoColor=white)](README.md)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?logo=python&logoColor=white)](README.md)
 [![许可证](https://img.shields.io/badge/许可证-MIT-lightgrey)](LICENSE)
@@ -104,6 +104,7 @@ build.bat
 
 | 版本  | 日期       | 说明                                                              |
 |-------|------------|-------------------------------------------------------------------|
+| 0.6.0 | 2026-06-01 | mistune 渲染引擎替换（5-10x 加速）/ 自定义 TOC + 代码高亮渲染器   |
 | 0.5.5 | 2026-05-27 | 保存Toast/未保存提醒/搜索大小写全词/性能优化/猫猫GIF打包修复      |
 | 0.5.4 | 2026-05-26 | 启动速度优化(QWebEngineView延迟创建+重型导入按需加载)/PyInstaller启动屏 |
 | 0.5.3 | 2026-05-25 | 猫猫打字动画/编辑预览同步滚动/macOS滚动条/启动速度优化             |
