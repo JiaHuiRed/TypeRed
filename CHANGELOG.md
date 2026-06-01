@@ -7,6 +7,28 @@
 
 ---
 
+## [0.6.0] - 2026-06-01
+
+### 重构
+
+- **渲染引擎替换**：用 `mistune`（C 扩展加速）替换 `python-markdown`，大文件渲染速度提升 5-10x
+- **移除 pymdownx / attr_list 依赖**：`==highlight==`、`~sub~`、`^sup^`、`~~strike~~` 由 mistune 原生插件支持，不再依赖 `pymdownx.mark`、`pymdownx.tilde`、`pymdownx.caret`
+
+### 优化
+
+- **TOC 生成重写**：自定 `TypeRedRenderer` 类，继承 `mistune.HTMLRenderer`，`heading()` 自动生成 ID 锚点 + ¶ permalink，`build_toc()` 根据 h2-h4 构建嵌套目录
+- **代码高亮保留**：`block_code()` 重写，使用 pygments 行内高亮，输出 `<div class="codehilite">` 保持 CSS 完全兼容
+- **去除模块级 `markdown` 导入**，进一步减少 Python 启动开销
+
+---
+
+## [0.5.6] - 2026-05-28
+
+### 重构
+
+- **提取内联资源**：`build_page()` 中的 JavaScript 移至 `frontend/script.js`，`_show_welcome()` 中的欢迎页 Markdown 内容移至 `frontend/welcome.md`，均启动时一次性读入内存缓存
+- **文件监听器去重**：新增 `_suspend_watcher()` / `_resume_watcher()` 辅助方法，消除 `save_file`、`_autosave`、`load_file` 中的 `removePath` / `addPath` 重复模式
+
 ## [0.5.5] - 2026-05-27
 
 ### 新增

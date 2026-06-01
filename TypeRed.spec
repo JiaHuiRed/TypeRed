@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('frontend/style.css', 'frontend'), ('frontend/mona-loading.gif', 'frontend')],
+    datas=[('frontend/style.css', 'frontend'), ('frontend/script.js', 'frontend'), ('frontend/welcome.md', 'frontend'), ('frontend/mona-loading.gif', 'frontend')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

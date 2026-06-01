@@ -1,5 +1,5 @@
 # author Red
-# TypeRed — Markdown Reader & Editor v0.5.5
+# TypeRed — Markdown Reader & Editor v0.6.0
 #//#260518 Red 0.3.0 编辑模式/实时预览/Markdown格式快捷键/上下标高亮渲染
 #//#260518 Red 0.3.1 欢迎页详细化/修复代码围栏嵌套渲染/README补全快捷键
 #//#260518 Red 0.3.2 pygments_css缓存/字数统计/编辑模式Ctrl+F指向编辑区
@@ -15,16 +15,20 @@
 #//#260522 Red 0.5.1 修复右侧边缘缩放与WebView滚动条重叠（右侧检测边距缩小至4px）
 #//#260523 Red 0.5.2 修复正文目录锚点无法跳转（JS优先preventDefault + Python同文件fragment检测）
 #//#260527 Red 0.5.5 保存toast/未保存提醒/搜索大小写全词/性能优化/build.bat修复
+#//#260528 Red 0.5.6 提取JS和欢迎页到frontend/、文件监听器去重
+#//#260601 Red 0.6.0 mistune 替换 markdown 渲染引擎 / 自定义 TOC + 代码高亮渲染器
 
 import sys
 import os
 import re
 import math
+import html
 import ctypes
 from functools import lru_cache
 
-import markdown
-from markdown.extensions.toc import TocExtension
+import mistune
+from pygments import highlight
+from pygments.lexers import get_lexer_by_name
 from pygments.formatters import HtmlFormatter
 
 from PySide6.QtWidgets import (
@@ -43,7 +47,7 @@ from PySide6.QtGui import (
     QMouseEvent, QAction, QTextCursor, QTextDocument, QRegion, QDesktopServices, QMovie,
 )
 
-VERSION  = "0.5.5"
+VERSION  = "0.6.0"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 MAX_RECENT = 10
@@ -121,40 +125,78 @@ def make_app_icon() -> QIcon:
 
 # ── Markdown 渲染 ─────────────────────────────────────────────────────────────
 
-def _build_extensions() -> list:
-    base = [
-        'fenced_code', 'tables', 'attr_list', 'def_list',
-        'footnotes', 'nl2br',
-        TocExtension(permalink=True, toc_depth='2-4'),
-        'codehilite', 'sane_lists',
-    ]
-    # 尝试加载 pymdownx 扩展（上标/下标/高亮）
-    optional = ['pymdownx.mark', 'pymdownx.tilde', 'pymdownx.caret']
-    for ext in optional:
-        try:
-            import importlib
-            importlib.import_module(ext)
-            base.append(ext)
-        except Exception:
-            pass
-    return base
+class TypeRedRenderer(mistune.HTMLRenderer):
+    def __init__(self):
+        super().__init__()
+        self.toc_entries: list[tuple[int, str, str]] = []
+
+    def reset_toc(self):
+        self.toc_entries.clear()
+
+    def heading(self, text: str, level: int) -> str:
+        slug = re.sub(r'<[^>]+>', '', text)
+        slug = re.sub(r'[^\w\u4e00-\u9fff]+', '-', slug).strip('-').lower()
+        if not slug:
+            slug = 'heading'
+        existing = {s for _, s, _ in self.toc_entries}
+        base = slug
+        i = 1
+        while slug in existing:
+            slug = f'{base}-{i}'
+            i += 1
+        self.toc_entries.append((level, slug, text))
+        return f'<h{level} id="{slug}">{text}<a class="headerlink" href="#{slug}">\u00b6</a></h{level}>'
+
+    def block_code(self, text: str, info: str | None = None) -> str:
+        lang = info.strip().split()[0] if info else ''
+        if lang:
+            try:
+                lexer = get_lexer_by_name(lang)
+                highlighted = highlight(text, lexer, HtmlFormatter(nowrap=True))
+                return f'<div class="codehilite"><pre><code class="language-{lang}">{highlighted}</code></pre></div>'
+            except Exception:
+                pass
+        text = html.escape(text)
+        return f'<div class="codehilite"><pre><code>{text}</code></pre></div>'
 
 
+def build_toc(entries: list[tuple[int, str, str]]) -> str:
+    filtered = [(l, s, t) for l, s, t in entries if 2 <= l <= 4]
+    if not filtered:
+        return ''
+    lines = ['<ul>']
+    prev = 2
+    for level, slug, text in filtered:
+        while level < prev:
+            lines.append('</ul></li>')
+            prev -= 1
+        while level > prev:
+            lines.append('<ul>')
+            prev += 1
+        lines.append(f'<li><a href="#{slug}">{text}</a>')
+    while prev > 2:
+        lines.append('</ul></li>')
+        prev -= 1
+    lines.append('</ul>')
+    return '\n'.join(lines)
 
 
 def render_markdown(text: str) -> tuple[str, str]:
-    #260525 Red 懒加载 Markdown 实例，省模块导入时间
     if not hasattr(render_markdown, '_md'):
-        exts = _build_extensions()
-        render_markdown._md = markdown.Markdown(
-            extensions=exts,
-            extension_configs={'codehilite': {'guess_lang': False, 'linenums': False}}
+        inline = mistune.InlineParser(hard_wrap=True)
+        plugins = [mistune.plugins.import_plugin(p) for p in [
+            'speedup', 'table', 'footnotes', 'def_list',
+            'mark', 'superscript', 'subscript', 'strikethrough',
+            'task_lists', 'url',
+        ]]
+        render_markdown._md = mistune.Markdown(
+            renderer=TypeRedRenderer(), inline=inline, plugins=plugins,
         )
     md = render_markdown._md
-    md.reset()
+    md.renderer.reset_toc()
     text = re.sub(r"</?div[^>]*>", "", text)
-    body = md.convert(text)
-    toc  = getattr(md, 'toc', '')
+    body = md(text)
+    toc = build_toc(md.renderer.toc_entries)
     return body, toc
 
 
@@ -166,8 +208,9 @@ def pygments_css(theme: str) -> str:
         return ''
 
 
-# CSS 启动时一次性读入内存
+# 资源文件启动时一次性读入内存
 _CSS_CACHE: str = ''
+_JS_CACHE: str = ''
 
 def _load_css() -> str:
     global _CSS_CACHE
@@ -179,9 +222,20 @@ def _load_css() -> str:
             _CSS_CACHE = ''
     return _CSS_CACHE
 
+def _load_js() -> str:
+    global _JS_CACHE
+    if not _JS_CACHE:
+        try:
+            with open(os.path.join(BASE_DIR, 'frontend', 'script.js'), encoding='utf-8') as f:
+                _JS_CACHE = f.read()
+        except Exception:
+            _JS_CACHE = ''
+    return _JS_CACHE
+
 
 def build_page(body: str, toc: str, theme: str, title: str = '') -> str:
     css_content = _load_css()
+    js_content = _load_js()
     toc_block = f'<nav id="toc">{toc}</nav><div id="toc-resize"></div>' if toc.strip() else ''
     return f"""<!DOCTYPE html>
 <html class="{theme}">
@@ -196,40 +250,7 @@ def build_page(body: str, toc: str, theme: str, title: str = '') -> str:
   {toc_block}
   <article id="content">{body}</article>
 </div>
-<script>
-  document.querySelectorAll('#toc a, #content a[href^="#"]').forEach(a => {{
-    a.addEventListener('click', e => {{
-      e.preventDefault();
-      const id = a.getAttribute('href').replace(/.*#/, '');
-      const el = document.getElementById(id);
-      if (el) {{ el.scrollIntoView({{behavior:'smooth'}}); }}
-    }});
-  }});
-  (function() {{
-    const handle = document.getElementById('toc-resize');
-    const toc = document.getElementById('toc');
-    if (!handle || !toc) return;
-    let dragging = false, startX = 0, startW = 0;
-    handle.addEventListener('mousedown', function(e) {{
-      dragging = true; startX = e.clientX; startW = toc.offsetWidth;
-      handle.classList.add('dragging');
-      document.body.style.userSelect = 'none';
-      e.preventDefault();
-    }});
-    document.addEventListener('mousemove', function(e) {{
-      if (!dragging) return;
-      const w = Math.max(120, Math.min(480, startW + e.clientX - startX));
-      toc.style.width = w + 'px';
-      toc.style.minWidth = w + 'px';
-    }});
-    document.addEventListener('mouseup', function() {{
-      if (!dragging) return;
-      dragging = false;
-      handle.classList.remove('dragging');
-      document.body.style.userSelect = '';
-    }});
-  }})();
-</script>
+<script>{js_content}</script>
 </body>
 </html>"""
 
@@ -1388,139 +1409,32 @@ class TypeRedWindow(QMainWindow):
 
     # ── 欢迎页 ────────────────────────────────────────────────────────────────
 
+    def _load_welcome_md(self) -> str:
+        try:
+            with open(os.path.join(BASE_DIR, 'frontend', 'welcome.md'), encoding='utf-8') as f:
+                md = f.read()
+        except Exception:
+            return ''
+        return md.replace('__APP_NAME__', APP_NAME).replace('__VERSION__', VERSION)
+
     def _show_welcome(self):
-        welcome_md = f"""# 欢迎使用 {APP_NAME}
-
-**{APP_NAME}** 是一个轻量级本地 Markdown 阅读/编辑器，基于 PySide6 + QWebEngineView，渲染效果接近 GitHub 风格。
-
-支持拖拽 `.md` / `.markdown` / `.mdown` / `.txt` 文件直接打开，或通过 `Ctrl+O` 选择文件。
-
-## 快捷键
-
-### 文件操作
-
-| 快捷键     | 功能                     |
-|------------|--------------------------|
-| `Ctrl+O`   | 打开文件                 |
-| `Ctrl+S`   | 保存 / 另存为            |
-| `Ctrl+R`   | 从磁盘重新加载           |
-| `Ctrl+P`   | 导出 PDF                 |
-
-### 视图与导航
-
-| 快捷键      | 功能                                   |
-|-------------|----------------------------------------|
-| `Ctrl+E`    | 切换编辑 / 阅读模式                    |
-| `Ctrl+T`    | 循环切换主题（5 种）                   |
-| `Ctrl+F`    | 搜索（阅读模式=页内，编辑模式=编辑区） |
-| `Ctrl+H`    | 查找替换（仅编辑模式）                 |
-| `Ctrl+滚轮` | 缩放预览区                             |
-
-### 编辑格式（编辑模式下）
-
-| 快捷键            | 效果                  | 示例              |
-|-------------------|-----------------------|-------------------|
-| `Ctrl+B`          | **粗体**              | `**文字**`        |
-| `Ctrl+I`          | *斜体*                | `*文字*`          |
-| `Ctrl+Shift+S`    | ~~删除线~~            | `~~文字~~`        |
-| `Ctrl+Shift+H`    | ==高亮==              | `==文字==`        |
-| `Ctrl+Shift+P`    | ^上标^                | `^文字^`          |
-| `Ctrl+Shift+B`    | ~下标~                | `~文字~`          |
-| `Ctrl+1` ~ `Ctrl+6` | H1 ~ H6 标题       | `# 标题`          |
-| `Ctrl+0`          | 取消标题              |                   |
-| `Ctrl+Shift+U`    | 无序列表              | `- 项目`          |
-| `Ctrl+Shift+O`    | 有序列表              | `1. 项目`         |
-| `Ctrl+Shift+T`    | 插入表格（选行列）    |                   |
-| `Tab`             | 缩进（4 空格）        |                   |
-| `Shift+Tab`       | 取消缩进              |                   |
-
-## Markdown 语法速查
-
-### 标题
-
-```
-# 一级标题
-## 二级标题
-### 三级标题
-```
-
-### 强调
-
-```
-**粗体**    *斜体*    ~~删除线~~    ==高亮==
-```
-
-### 列表
-
-> **注意**：`-` 后面必须有一个空格，列表前需要空一行。
-
-```
-- 无序项目
-- 无序项目
-  - 嵌套项目（两个空格缩进）
-
-1. 有序项目
-2. 有序项目
-```
-
-### 链接与图片
-
-```
-[链接文字](https://example.com)
-![图片描述](image.png)
-```
-
-> **提示**：编辑模式下可直接将图片文件（`.png/.jpg/.gif` 等）拖入编辑区，自动插入 `![]()` 语法。
-
-### 代码
-
-    行内代码：`code`
-
-    代码块：
-    ```python
-    print("Hello")
-    ```
-
-### 引用与分隔线
-
-```
-> 这是一段引用
-
----
-```
-
-### 表格
-
-```
-| 列1   | 列2   |
-|-------|-------|
-| 内容  | 内容  |
-```
-
-### 上下标
-
-```
-H~2~O（下标）    x^2^（上标）
-```
-
-## 主题
-
-点击顶部工具栏的 5 个圆点按钮，或按 `Ctrl+T` 循环切换：
-
-- **默认**（浅白）— 标准 GitHub 风格
-- **护眼**（浅绿）— 减少视觉疲劳
-- **米黄**（暖黄）— 纸张感阅读
-- **暗色**（深蓝）— Tokyo Night 风格
-- **夜间**（纯黑）— 极暗背景
-
----
-
-*版本 {VERSION} · 作者 Red*
-"""
+        welcome_md = self._load_welcome_md()
+        if not welcome_md:
+            return
         body, toc = render_markdown(welcome_md)
         if self.view:
             self.view.setHtml(build_page(body, toc, self.theme, APP_NAME),
                               QUrl(f'file:///{BASE_DIR}/'))
+
+    # ── 文件监听器辅助 ────────────────────────────────────────────────────────
+
+    def _suspend_watcher(self):
+        if self.current_file and self.current_file in self._watcher.files():
+            self._watcher.removePath(self.current_file)
+
+    def _resume_watcher(self):
+        if self.current_file and self.current_file not in self._watcher.files():
+            self._watcher.addPath(self.current_file)
 
     # ── 文件操作 ──────────────────────────────────────────────────────────────
 
@@ -1558,8 +1472,7 @@ H~2~O（下标）    x^2^（上标）
             with open(path, encoding='gbk', errors='replace') as f:
                 text = f.read()
 
-        if self.current_file and self.current_file != path:
-            self._watcher.removePath(self.current_file)
+        self._suspend_watcher()
         if path not in self._watcher.files():
             self._watcher.addPath(path)
 
@@ -1596,14 +1509,14 @@ H~2~O（下标）    x^2^（上标）
             return
         text = self.editor.toPlainText()
         try:
-            self._watcher.removePath(self.current_file)
+            self._suspend_watcher()
             with open(self.current_file, 'w', encoding='utf-8') as f:
                 f.write(text)
-            self._watcher.addPath(self.current_file)
         except Exception as ex:
-            self._watcher.addPath(self.current_file)
+            self._resume_watcher()
             self.statusBar().showMessage(f'保存失败：{ex}')
             return
+        self._resume_watcher()
         self._current_text = text
         self._modified     = False
         self._update_title()
@@ -1643,19 +1556,19 @@ H~2~O（下标）    x^2^（上标）
             return
         text = self.editor.toPlainText()
         try:
-            # 暂停 watcher，避免写入触发 _on_file_changed 重新加载
-            self._watcher.removePath(self.current_file)
+            self._suspend_watcher()
             with open(self.current_file, 'w', encoding='utf-8') as f:
                 f.write(text)
-            self._watcher.addPath(self.current_file)
-            self._current_text = text
-            self._modified = False
-            self._update_title()
-            self.statusBar().showMessage(
-                f'自动保存：{os.path.basename(self.current_file)}', 2000
-            )
         except Exception:
-            self._watcher.addPath(self.current_file)
+            self._resume_watcher()
+            return
+        self._resume_watcher()
+        self._current_text = text
+        self._modified = False
+        self._update_title()
+        self.statusBar().showMessage(
+            f'自动保存：{os.path.basename(self.current_file)}', 2000
+        )
 
     def _on_file_changed(self, path: str):
         if path == self.current_file and os.path.isfile(path) and not self._modified:

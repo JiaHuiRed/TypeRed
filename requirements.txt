@@ -1,7 +1,6 @@
 PySide6
-markdown
+mistune
 pygments
-pymdown-extensions
 
 # 构建依赖（仅 build.bat 打包时需要，运行不需要）
 # pillow
