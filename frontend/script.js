@@ -33,3 +33,42 @@ document.querySelectorAll('#toc a, #content a[href^="#"]').forEach(a => {
     document.body.style.userSelect = '';
   });
 })();
+
+/* #260601 Red 0.6.5 可点击任务列表复选框 */
+(function() {
+  document.querySelectorAll('#content .task-list-item input[type="checkbox"]').forEach(cb => {
+    cb.removeAttribute('disabled');
+    cb.addEventListener('change', function(e) {
+      /* 状态变化已自动反映在 checked 属性上 */
+    });
+  });
+})();
+
+/* #260601 Red 0.6.5 图片点击放大遮罩层 */
+(function() {
+  const overlay = document.createElement('div');
+  overlay.id = 'img-overlay';
+  overlay.innerHTML = '<span class="img-close">&times;</span><img src="" alt="">';
+  overlay.addEventListener('click', function(e) {
+    if (e.target === overlay || e.target.classList.contains('img-close')) {
+      overlay.classList.remove('active');
+    }
+  });
+  document.body.appendChild(overlay);
+
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && overlay.classList.contains('active')) {
+      overlay.classList.remove('active');
+    }
+  });
+
+  document.querySelectorAll('#content img').forEach(img => {
+    img.style.cursor = 'zoom-in';
+    img.addEventListener('click', function(e) {
+      e.stopPropagation();
+      overlay.querySelector('img').src = this.src;
+      overlay.querySelector('img').alt = this.alt;
+      overlay.classList.add('active');
+    });
+  });
+})();

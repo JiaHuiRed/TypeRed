@@ -1,5 +1,5 @@
 # author Red
-# TypeRed — Markdown Reader & Editor v0.6.4
+# TypeRed — Markdown Reader & Editor v0.6.5
 #//#260518 Red 0.3.0 编辑模式/实时预览/Markdown格式快捷键/上下标高亮渲染
 #//#260518 Red 0.3.1 欢迎页详细化/修复代码围栏嵌套渲染/README补全快捷键
 #//#260518 Red 0.3.2 pygments_css缓存/字数统计/编辑模式Ctrl+F指向编辑区
@@ -28,6 +28,7 @@ import html
 import ctypes
 from functools import lru_cache
 
+import emoji
 import mistune
 from pygments import highlight
 from pygments.lexers import get_lexer_by_name
@@ -49,7 +50,7 @@ from PySide6.QtGui import (
     QMouseEvent, QAction, QTextCursor, QTextDocument, QRegion, QDesktopServices, QMovie,
 )
 
-VERSION  = "0.6.4"
+VERSION  = "0.6.5"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 MAX_RECENT = 10
@@ -183,11 +184,39 @@ def build_toc(entries: list[tuple[int, str, str]]) -> str:
     return '\n'.join(lines)
 
 
+# ── 智能排版替换 ──────────────────────────────────────────────────────────
+#//#260601 Red 0.6.5 markdown-it typographer 风格的智能排版 + emoji
+
+_TYPOGRAPH = [
+    (r'\.\.\.',              '\u2026'),  # ... → …
+    (r'(?<!-)--(?!-)',       '\u2014'),  # -- → — (em dash, not ---)
+    (r'-&gt;',               '\u2192'),  # -> → → (HTML-escaped >)
+    (r'&lt;-',               '\u2190'),  # <- → ←
+    (r'=&gt;',               '\u21d2'),  # => → ⇒
+    (r'\(c\)',               '\u00a9'),  # (c) → ©
+    (r'\(r\)',               '\u00ae'),  # (r) → ®
+    (r'\(tm\)',              '\u2122'),  # (tm) → ™
+]
+
+_TAG_BLOCK = re.compile(
+    r'(<(pre|code|style|script)[^>]*>.*?</\2>)',
+    re.DOTALL | re.IGNORECASE,
+)
+
+def _typograph(text: str) -> str:
+    """Apply typographic replacements outside code/pre/style blocks."""
+    parts = _TAG_BLOCK.split(text)
+    for i in range(0, len(parts), 2):
+        for pattern, repl in _TYPOGRAPH:
+            parts[i] = re.sub(pattern, repl, parts[i])
+    return ''.join(parts)
+
+
 def render_markdown(text: str) -> tuple[str, str]:
     if not hasattr(render_markdown, '_md'):
         inline = mistune.InlineParser(hard_wrap=True)
         plugins = [mistune.plugins.import_plugin(p) for p in [
-            'speedup', 'table', 'footnotes', 'def_list',
+            'speedup', 'table', 'footnotes', 'def_list', 'abbr',
             'mark', 'superscript', 'subscript', 'strikethrough',
             'task_lists', 'url',
         ]]
@@ -196,8 +225,10 @@ def render_markdown(text: str) -> tuple[str, str]:
         )
     md = render_markdown._md
     md.renderer.reset_toc()
+    text = emoji.emojize(text, language='alias')
     text = re.sub(r"</?div[^>]*>", "", text)
     body = md(text)
+    body = _typograph(body)
     toc = build_toc(md.renderer.toc_entries)
     return body, toc
 

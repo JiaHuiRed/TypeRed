@@ -1,4 +1,4 @@
-# TypeRed — Markdown Reader & Editor
+# TypeRed — Markdown Reader & Editor 😊📖
 
 [![GitHub Release](https://img.shields.io/github/v/release/JiaHuiRed/TypeRed?label=版本&color=blue&logo=github)](CHANGELOG.md)
 [![平台](https://img.shields.io/badge/平台-Windows%2010%2F11-0078d7?logo=windows&logoColor=white)](README.md)
@@ -26,6 +26,12 @@ TypeRed 是一个轻量级本地 Markdown 阅读 / 编辑器，基于 **PySide6 
 - **分屏编辑** — `Ctrl+E` 切换编辑模式，400ms 实时预览 + 同步滚动
 - **格式快捷键** — 粗体/斜体/删除线/高亮/上下标/标题/列表
 - **猫猫动画** — 打字时猫猫弹跳，空闲时 GIF 循环
+- **猫猫动画** — 打字时猫猫弹跳，空闲时 GIF 循环
+- **Emoji 短代码** — `:smile:` → 😄、`:rocket:` → 🚀，完整 emoji 词汇表支持
+- **智能排版** — `...` → …、`--` → —、`->` → → 等，代码块内不受影响
+- **图片点击放大** — 全屏遮罩查看原图，ESC/点击关闭，毛玻璃背景
+- **缩写支持** — `*[HTML]: ...` 语法自动转为 `<abbr>` 标签
+- **可点击任务列表** — `- [ ]` 复选框支持点击切换
 - **macOS 交通灯** — 红黄绿关闭/最小化/最大化按钮 + 无边框窗口缩放
 
 ## 环境要求
@@ -83,6 +89,7 @@ build.bat
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| 0.6.5 | 2026-06-08 | Emoji短代码 / 智能排版 / 图片放大 / 缩写 / 可点击任务列表 |
 | 0.6.4 | 2026-06-01 | 修复mistune HTML转义，支持details折叠 |
 | 0.6.3 | 2026-06-01 | 搜索栏移至标题栏下方 |
 | 0.6.2 | 2026-06-01 | 真毛玻璃 / 6px 滚动条 / TOC blur |
