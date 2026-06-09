@@ -17,7 +17,7 @@ if errorlevel 1 (
 )
 
 echo [3/3] Building exe...
-pyinstaller --onefile --windowed --name TypeRed --icon TypeRed.ico --add-data "frontend/style.css;frontend" --add-data "frontend/script.js;frontend" --add-data "frontend/welcome.md;frontend" --add-data "frontend/mona-loading.gif;frontend" --splash splash.png --noupx --clean main.py
+pyinstaller --onedir --windowed --name TypeRed --icon TypeRed.ico --add-data "frontend/style.css;frontend" --add-data "frontend/script.js;frontend" --add-data "frontend/welcome.md;frontend" --add-data "frontend/mona-loading.gif;frontend" --splash splash.png --noupx --clean main.py
 if errorlevel 1 (
     echo Build failed.
     pause

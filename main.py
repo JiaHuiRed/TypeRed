@@ -26,6 +26,7 @@ import re
 import math
 import html
 import ctypes
+from dataclasses import dataclass, field
 from functools import lru_cache
 
 import emoji
@@ -37,7 +38,7 @@ from pygments.formatters import HtmlFormatter
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QFileDialog, QLabel, QPushButton, QSizeGrip, QMenu,
-    QPlainTextEdit, QSplitter, QLineEdit,
+    QPlainTextEdit, QSplitter, QLineEdit, QTabBar,
     QDialog, QSpinBox, QFormLayout, QDialogButtonBox, QMessageBox,
 )
 from PySide6.QtCore import (
@@ -50,7 +51,7 @@ from PySide6.QtGui import (
     QMouseEvent, QAction, QTextCursor, QTextDocument, QRegion, QDesktopServices, QMovie,
 )
 
-VERSION  = "0.6.5"
+VERSION  = "0.7.0"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 MAX_RECENT = 10
@@ -103,6 +104,19 @@ THEME_LINENO: dict[str, tuple[str, str]] = {
     'dark':     ('#13141d', '#5a5e7a'),
     'night':    ('#080808', '#484848'),
 }
+
+# ── Tab 数据 ──────────────────────────────────────────────────────────────────
+
+@dataclass
+class _TabData:
+    """单个标签页的状态快照。"""
+    path: str = ''
+    text: str = ''
+    modified: bool = False
+    is_xmind: bool = False
+    nav_history: list = field(default_factory=list)
+    nav_idx: int = -1
+
 
 # ── 程序化图标 ────────────────────────────────────────────────────────────────
 
@@ -1166,6 +1180,8 @@ class TypeRedWindow(QMainWindow):
         self._restore_last    = ''
         self._cached_text     = ''
         self._is_xmind        = False
+        self._tabs: list[_TabData] = []
+        self._current_tab_idx = -1
         self._app_icon        = app_icon
         self._settings        = QSettings('Red', APP_NAME)
         self._watcher         = QFileSystemWatcher(self)
@@ -1223,13 +1239,27 @@ class TypeRedWindow(QMainWindow):
         self.statusBar().setSizeGripEnabled(False)
         self.statusBar().addPermanentWidget(QSizeGrip(self))
         self.statusBar().setStyleSheet("QStatusBar{background:transparent;}")
-        self.statusBar().showMessage(f'{APP_NAME} v{VERSION}  |  拖入 .md 文件或点击「打开」')
+        #260609 Red v0.7.0 常驻状态栏
+        self._status_label = QLabel(f'{APP_NAME} v{VERSION}  |  拖入 .md 文件或点击「打开」')
+        self._status_label.setStyleSheet('color: inherit;')
+        self.statusBar().addWidget(self._status_label, 1)
 
         central = QWidget()
         layout  = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self.titlebar)
+
+        #260609 Red v0.7.0 多标签页
+        self.tab_bar = QTabBar()
+        self.tab_bar.setTabsClosable(False)  # 自定义红色圆点关闭按钮
+        self.tab_bar.setMovable(True)
+        self.tab_bar.setDocumentMode(True)
+        self.tab_bar.setExpanding(False)
+        self.tab_bar.tabMoved.connect(self._rewire_close_btns)
+        self.tab_bar.currentChanged.connect(self._on_tab_changed)
+        layout.addWidget(self.tab_bar)
+
         layout.addWidget(self.search_bar)
         layout.addWidget(self.splitter, 1)
         self.setCentralWidget(central)
@@ -1308,6 +1338,168 @@ class TypeRedWindow(QMainWindow):
         else:
             self._pre_max_geo = self.geometry()
             self.showMaximized()
+
+    # ── 多标签页 ──────────────────────────────────────────────────────────────
+
+    def _tab(self) -> _TabData | None:
+        """当前标签页数据，无标签时返回 None。"""
+        if 0 <= self._current_tab_idx < len(self._tabs):
+            return self._tabs[self._current_tab_idx]
+        return None
+
+    def _new_tab(self, path: str = '', text: str = '', is_xmind: bool = False) -> _TabData:
+        """新建标签页并切换到它。"""
+        td = _TabData(path=path, text=text, is_xmind=is_xmind)
+        self._tabs.append(td)
+        name = os.path.basename(path) if path else 'untitled.md'
+        idx = self.tab_bar.addTab(name)
+        self._setup_close_btn(idx)
+        self._current_tab_idx = len(self._tabs) - 1
+        self.tab_bar.setCurrentIndex(self._current_tab_idx)
+        return td
+
+    def _setup_close_btn(self, idx: int):
+        """给标签页 idx 添加红色圆点关闭按钮。"""
+        btn = QPushButton()
+        btn.setFixedSize(12, 12)
+        btn.setCursor(Qt.ArrowCursor)
+        btn.setStyleSheet("""
+            QPushButton {
+                background: #ff5f57;
+                border: none;
+                border-radius: 6px;
+            }
+            QPushButton:hover {
+                background: #ff3b30;
+            }
+            QPushButton:pressed {
+                background: #cc2a22;
+            }
+        """)
+        btn.clicked.connect(lambda checked, i=idx: self._close_tab(i))
+        self.tab_bar.setTabButton(idx, QTabBar.RightSide, btn)
+
+    def _rewire_close_btns(self):
+        """标签拖拽重排后重新挂载关闭按钮。"""
+        for i in range(self.tab_bar.count()):
+            self._setup_close_btn(i)
+
+    def _close_tab(self, idx: int):
+        """关闭指定索引的标签页。"""
+        if not (0 <= idx < len(self._tabs)):
+            return
+        td = self._tabs[idx]
+        if td.modified:
+            ret = QMessageBox.question(
+                self, '未保存的更改',
+                f'「{os.path.basename(td.path) if td.path else "untitled.md"}」'
+                f'有未保存的更改，是否保存？',
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+            )
+            if ret == QMessageBox.Save:
+                path = td.path
+                if not path:
+                    path, _ = QFileDialog.getSaveFileName(
+                        self, '保存', 'untitled.md', 'Markdown 文件 (*.md)'
+                    )
+                    if not path:
+                        return
+                try:
+                    with open(path, 'w', encoding='utf-8') as f:
+                        f.write(td.text)
+                except Exception as ex:
+                    self.statusBar().showMessage(f'保存失败：{ex}')
+                    return
+                td.path = path
+                td.modified = False
+            elif ret == QMessageBox.Cancel:
+                return
+        self._tabs.pop(idx)
+        self.tab_bar.removeTab(idx)
+        if self._tabs:
+            self._rewire_close_btns()
+            new_idx = min(idx, len(self._tabs) - 1)
+            self._switch_to_tab(new_idx)
+        else:
+            self._current_tab_idx = -1
+            self.current_file = ''
+            self._current_text = ''
+            self._modified = False
+            self._show_welcome()
+            self._update_title()
+            self._update_status_bar()
+
+    def _on_tab_changed(self, idx: int):
+        """QTabBar.currentChanged 信号。"""
+        if idx < 0 or idx >= len(self._tabs):
+            return
+        self._switch_to_tab(idx)
+
+    def _switch_to_tab(self, idx: int):
+        """保存当前标签状态，切到目标标签。"""
+        # 保存当前
+        old = self._tab()
+        if old is not None:
+            old.text = self.editor.toPlainText() if self._edit_mode else self._current_text
+            old.modified = self._modified
+            old.nav_history = self._nav_history[:]
+            old.nav_idx = self._nav_idx
+
+        self._suspend_watcher()
+        self._current_tab_idx = idx
+        td = self._tabs[idx]
+        self.current_file = td.path
+        self._current_text = td.text
+        self._modified = td.modified
+        self._is_xmind = td.is_xmind
+        if td.path and td.path not in self._watcher.files() and not td.is_xmind:
+            self._watcher.addPath(td.path)
+        self._nav_history = td.nav_history[:]
+        self._nav_idx = td.nav_idx
+
+        if self._edit_mode:
+            self.editor.blockSignals(True)
+            self.editor.setPlainText(td.text)
+            self.editor.blockSignals(False)
+
+        self._update_preview()
+        self._update_title()
+        self._update_status_bar()
+
+    def _apply_tab_theme(self, theme: str):
+        _, fg, border, _, _ = THEME_TB[theme]
+        self.tab_bar.setStyleSheet(f"""
+            QTabBar {{
+                background: transparent;
+                border-bottom: 1px solid {border};
+                padding: 0 4px;
+                font-size: 12px;
+            }}
+            QTabBar::tab {{
+                background: transparent;
+                color: {fg};
+                border: none;
+                padding: 5px 12px;
+                min-width: 40px;
+            }}
+            QTabBar::tab:selected {{
+                border-bottom: 2px solid #5b7cf7;
+                color: #5b7cf7;
+            }}
+            QTabBar::tab:hover {{
+                background: rgba(128,128,128,0.1);
+            }}
+        """)
+
+    def _update_tab_name(self):
+        """将当前文件名同步到标签栏。"""
+        td = self._tab()
+        if td is None or self._current_tab_idx < 0:
+            return
+        name = os.path.basename(td.path) if td.path else 'untitled.md'
+        if td.modified:
+            name = '* ' + name
+        self.tab_bar.setTabText(self._current_tab_idx, name)
 
     def _reposition_cat(self):
         cw = self.centralWidget()
@@ -1419,6 +1611,7 @@ class TypeRedWindow(QMainWindow):
         if theme in THEMES:
             self.theme = theme
             self.titlebar.apply_theme(theme)
+            self._apply_tab_theme(theme)
             self.search_bar.apply_theme(theme)
             self.editor.apply_theme(theme)
 
@@ -1483,6 +1676,7 @@ class TypeRedWindow(QMainWindow):
     # ── 快捷键 ────────────────────────────────────────────────────────────────
 
     def _register_shortcuts(self):
+        QShortcut(QKeySequence('Ctrl+N'),       self).activated.connect(self._new_file)
         QShortcut(QKeySequence('Ctrl+O'),       self).activated.connect(self.open_file_dialog)
         QShortcut(QKeySequence('Ctrl+T'),       self).activated.connect(self._cycle_theme)
         QShortcut(QKeySequence('Ctrl+F'),       self).activated.connect(self._toggle_search)
@@ -1580,27 +1774,38 @@ class TypeRedWindow(QMainWindow):
         if not os.path.isfile(path):
             self.statusBar().showMessage(f'文件不存在：{path}')
             return
-        # 切换文件前检查未保存更改
-        if self._modified:
-            ret = QMessageBox.question(
-                self, '未保存的更改',
-                '当前文件有未保存的更改，是否保存？',
-                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
-                QMessageBox.Save,
-            )
-            if ret == QMessageBox.Save:
-                self.save_file()
-                if self._modified:
-                    return
-            elif ret == QMessageBox.Cancel:
+
+        # 标签页：已打开则切过去
+        norm = os.path.normcase(path)
+        for i, td in enumerate(self._tabs):
+            if td.path and os.path.normcase(td.path) == norm:
+                self.tab_bar.setCurrentIndex(i)
                 return
+
+        # 保存当前标签状态
+        old = self._tab()
+        if old is not None:
+            old.text = self.editor.toPlainText() if self._edit_mode else self._current_text
+            old.modified = self._modified
+            old.nav_history = self._nav_history[:]
+            old.nav_idx = self._nav_idx
+
+        # 复用 untitled 空标签或新建
+        reuse = (old is not None and not old.path and not old.modified)
+        if not reuse:
+            td = self._new_tab()
+        else:
+            td = old
+
         ext = os.path.splitext(path)[1].lower()
         if ext == '.xmind':
             text = _xmind_to_markdown(path)
             if not text:
+                if not reuse:
+                    self._close_tab(self._current_tab_idx)
                 self.statusBar().showMessage('无法解析 XMind 文件')
                 return
-            self._is_xmind = True
+            td.is_xmind = True
         else:
             try:
                 with open(path, encoding='utf-8-sig') as f:
@@ -1608,21 +1813,28 @@ class TypeRedWindow(QMainWindow):
             except UnicodeDecodeError:
                 with open(path, encoding='gbk', errors='replace') as f:
                     text = f.read()
-            self._is_xmind = False
+            td.is_xmind = False
 
         self._suspend_watcher()
-        if path not in self._watcher.files() and not self._is_xmind:
+        if path not in self._watcher.files() and not td.is_xmind:
             self._watcher.addPath(path)
 
+        td.path   = path
+        td.text   = text
+        td.modified = False
+        if _push_history:
+            td.nav_history = td.nav_history[:td.nav_idx + 1]
+            if not td.nav_history or td.nav_history[-1] != path:
+                td.nav_history.append(path)
+            td.nav_idx = len(td.nav_history) - 1
+
+        # 读取到实例变量（下游方法依赖这些）
         self.current_file  = path
         self._current_text = text
-        if _push_history:
-            # 截断前进历史，推入当前路径
-            self._nav_history = self._nav_history[:self._nav_idx + 1]
-            if not self._nav_history or self._nav_history[-1] != path:
-                self._nav_history.append(path)
-            self._nav_idx = len(self._nav_history) - 1
         self._modified     = False
+        self._is_xmind     = td.is_xmind
+        self._nav_history  = td.nav_history[:]
+        self._nav_idx      = td.nav_idx
 
         if self._edit_mode:
             self.editor.blockSignals(True)
@@ -1631,13 +1843,9 @@ class TypeRedWindow(QMainWindow):
 
         self._update_preview()
         self._update_title()
+        self._update_tab_name()
+        self._update_status_bar()
         self._add_recent(path)
-
-        size_kb = max(1, os.path.getsize(path) // 1024)
-        fmt = 'XMind' if self._is_xmind else 'Markdown'
-        self.statusBar().showMessage(
-            f'{path}  |  {fmt}  |  {text.count(chr(10)) + 1} 行  |  {size_kb} KB'
-        )
 
     def save_file(self):
         if not self._edit_mode:
@@ -1658,8 +1866,13 @@ class TypeRedWindow(QMainWindow):
         self._resume_watcher()
         self._current_text = text
         self._modified     = False
+        td = self._tab()
+        if td:
+            td.text = text
+            td.modified = False
         self._update_title()
-        self.statusBar().showMessage(f'已保存：{self.current_file}')
+        self._update_status_bar()
+        self.statusBar().showMessage(f'已保存：{os.path.basename(self.current_file)}')
         self._toast.show_message(f'已保存：{os.path.basename(self.current_file)}')
 
     def _save_as_file(self):
@@ -1680,11 +1893,59 @@ class TypeRedWindow(QMainWindow):
             return False
         self._current_text = text
         self._modified     = False
+        td = self._tab()
+        if td:
+            td.path = path
+            td.text = text
+            td.modified = False
         self._update_title()
+        self._update_tab_name()
         self._add_recent(path)
+        self._update_status_bar()
         self.statusBar().showMessage(f'已保存：{path}')
         self._toast.show_message(f'已保存：{os.path.basename(path)}')
         return True
+
+    def _new_file(self):
+        """新建空白 untitled 标签页，自动切编辑模式。"""
+        td = self._tab()
+        if td is not None:
+            td.text = self.editor.toPlainText() if self._edit_mode else self._current_text
+            td.modified = self._modified
+            if td.modified:
+                ret = QMessageBox.question(
+                    self, '未保存的更改',
+                    f'「{os.path.basename(td.path) if td.path else "untitled.md"}」'
+                    f'有未保存的更改，是否保存？',
+                    QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+                )
+                if ret == QMessageBox.Save:
+                    self.save_file()
+                    if self._modified:
+                        return
+                elif ret == QMessageBox.Cancel:
+                    return
+
+        self._suspend_watcher()
+        td = self._new_tab(text='')
+        self.current_file  = ''
+        self._current_text = ''
+        self._modified     = False
+        self._is_xmind     = False
+
+        self._edit_mode = True
+        self.editor.blockSignals(True)
+        self.editor.setPlainText('')
+        self.editor.blockSignals(False)
+        self.editor.setVisible(True)
+        self.splitter.setSizes([self.width() // 2, self.width() // 2])
+        self.editor.setFocus()
+        self.titlebar.set_edit_active(True)
+        self._update_title()
+        self._update_tab_name()
+        self._update_status_bar()
+        self._reposition_cat()
+        self._cat_movie.start()
 
     def _reload_from_disk(self):
         if self.current_file:
@@ -1704,6 +1965,10 @@ class TypeRedWindow(QMainWindow):
         self._resume_watcher()
         self._current_text = text
         self._modified = False
+        td = self._tab()
+        if td:
+            td.text = text
+            td.modified = False
         self._update_title()
         self.statusBar().showMessage(
             f'自动保存：{os.path.basename(self.current_file)}', 2000
@@ -1730,6 +1995,11 @@ class TypeRedWindow(QMainWindow):
             self.editor.setFocus()
         else:
             self._edit_mode = False
+            text = getattr(self, '_cached_text', '') or self.editor.toPlainText()
+            self._current_text = text
+            td = self._tab()
+            if td:
+                td.text = text
             self.editor.setVisible(False)
             self.splitter.setSizes([0, self.width()])
         self.titlebar.set_edit_active(self._edit_mode)
@@ -1775,6 +2045,9 @@ class TypeRedWindow(QMainWindow):
     def _on_editor_changed(self):
         if not self._modified:
             self._modified = True
+            td = self._tab()
+            if td:
+                td.modified = True
             self._update_title()
         self._preview_timer.start()
         # 缓存 toPlainText 避免 _update_preview 重复调用
@@ -1782,13 +2055,22 @@ class TypeRedWindow(QMainWindow):
         self._status_timer.start()
 
     def _update_status_bar(self):
-        text = getattr(self, '_cached_text', '')
-        if not text:
+        if not self.current_file and not self._current_text:
+            self._status_label.setText(
+                f'{APP_NAME} v{VERSION}  |  拖入 .md 文件或点击「打开」'
+            )
             return
-        chars = len(text)
-        words = len(text.split()) if text.strip() else 0
-        lines = self.editor.blockCount()
-        self.statusBar().showMessage(f'{words} 词  ·  {chars} 字符  ·  {lines} 行')
+        path = self.current_file
+        fmt = 'XMind' if self._is_xmind else 'Markdown'
+        size_kb = max(1, os.path.getsize(path) // 1024) if path and os.path.isfile(path) else 0
+        lines = self._current_text.count('\n') + 1
+        chars = len(self._current_text)
+        words = len(self._current_text.split()) if self._current_text.strip() else 0
+        self._status_label.setText(
+            f'{os.path.basename(path) if path else "untitled.md"}'
+            f'  |  {fmt}  |  {lines} 行  |  {size_kb} KB'
+            f'  |  {words} 词  ·  {chars} 字符'
+        )
 
     def _sync_preview_scroll(self):
         ratio = getattr(self, '_pending_scroll_ratio', None)
@@ -1862,6 +2144,10 @@ class TypeRedWindow(QMainWindow):
             prefix = '* ' if self._modified else ''
             self.setWindowTitle(f'{prefix}{name} — {APP_NAME}')
             self.titlebar.lbl_title.setText(f'{prefix}{name}')
+        else:
+            self.setWindowTitle(f'{APP_NAME} v{VERSION}')
+            self.titlebar.lbl_title.setText(APP_NAME)
+        self._update_tab_name()
 
     # ── 导出 PDF ──────────────────────────────────────────────────────────────
 
@@ -1889,6 +2175,7 @@ class TypeRedWindow(QMainWindow):
         self.titlebar.set_edit_active(self._edit_mode)
         self.search_bar.apply_theme(theme)
         self.editor.apply_theme(theme)
+        self._apply_tab_theme(theme)
         #260525 Red 猫猫边框跟随主题
         _, _, border, _, _ = THEME_TB[theme]
         self._cat_label.setStyleSheet(f'border: 1px solid {border}; border-radius: 10px;')
@@ -1931,6 +2218,9 @@ def main():
 
     initial_file = sys.argv[1] if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]) else ''
     win = TypeRedWindow(icon, initial_file)
+    #260609 Red v0.6.6 在 splash 阶段提前初始化 WebView（Chromium 子进程启动 + 内容加载），
+    #           窗口弹出时内容已就绪或接近就绪，消除「加载中…」等待时间。
+    win._init_view()
     win.show()
 
     sys.exit(app.exec())
