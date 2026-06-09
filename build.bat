@@ -16,8 +16,16 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [3/3] Building exe...
-pyinstaller --onedir --windowed --name TypeRed --icon TypeRed.ico --add-data "frontend/style.css;frontend" --add-data "frontend/script.js;frontend" --add-data "frontend/welcome.md;frontend" --add-data "frontend/mona-loading.gif;frontend" --splash splash.png --noupx --clean main.py
+echo [3/4] Generating version info...
+python make_version.py
+if errorlevel 1 (
+    echo Failed to generate version info.
+    pause
+    exit /b 1
+)
+
+echo [4/4] Building exe...
+pyinstaller --onedir --windowed --name TypeRed --icon TypeRed.ico --version-file version.txt --add-data "frontend/style.css;frontend" --add-data "frontend/script.js;frontend" --add-data "frontend/welcome.md;frontend" --add-data "frontend/mona-loading.gif;frontend" --splash splash.png --noupx --clean main.py
 if errorlevel 1 (
     echo Build failed.
     pause
