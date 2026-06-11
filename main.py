@@ -43,7 +43,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import (
     Qt, QUrl, QPointF, QRectF, QRect, QEvent, QObject,
-    QFileSystemWatcher, QSettings, QSize, QPoint, QTimer, Signal,
+    QFileSystemWatcher, QSettings, QSize, QPoint, QTimer,
 )
 from PySide6.QtGui import (
     QIcon, QDragEnterEvent, QDropEvent, QKeySequence, QShortcut,
@@ -1172,22 +1172,6 @@ class _EdgeOverlay(QWidget):
 # ── 主窗口 ────────────────────────────────────────────────────────────────────
 
 
-class _RenderWorker(QObject):
-    """后台 Markdown 渲染线程"""
-    finished = Signal(str, list)  # body, toc
-    error    = Signal(str)
-
-    def __init__(self, text: str):
-        super().__init__()
-        self._text = text
-
-    def run(self):
-        try:
-            body, toc = render_markdown(self._text)
-            self.finished.emit(body, toc)
-        except Exception as ex:
-            self.error.emit(str(ex))
-
 class TypeRedWindow(QMainWindow):
     def __init__(self, app_icon: QIcon, initial_file: str = ''):
         super().__init__()
@@ -2196,39 +2180,15 @@ class TypeRedWindow(QMainWindow):
         self._loading_overlay.raise_()
         self._loading_overlay.repaint()
 
-        # 大文件 (>10KB) 用后台线程渲染，小文件直接渲染避免线程开销
-        if len(text.encode('utf-8')) > 10240:
-            self._start_render_worker(text, title)
-        else:
-            try:
-                body, toc = render_markdown(text)
-            except Exception as ex:
-                self._loading_overlay.hide()
-                self.statusBar().showMessage(f'渲染失败：{ex}')
-                return
-            self._apply_render_result(body, toc, title)
+        try:
+            body, toc = render_markdown(text)
+        except Exception as ex:
+            self._loading_overlay.hide()
+            self.statusBar().showMessage(f'渲染失败：{ex}')
+            return
+        self._apply_render_result(body, toc, title)
 
 
-    def _start_render_worker(self, text, title):
-        """启动后台渲染线程"""
-        from PySide6.QtCore import QThread
-        old_thread = getattr(self, '_render_thread', None)
-        if old_thread is not None:
-            old_thread.quit()
-            old_thread.wait(200)
-        self._render_text = text
-        self._render_title = title
-        self._render_thread = QThread()
-        self._render_worker = _RenderWorker(text)
-        self._render_worker.moveToThread(self._render_thread)
-        self._render_worker.finished.connect(
-            lambda body, toc: self._apply_render_result(body, toc, title)
-        )
-        self._render_worker.error.connect(
-            lambda msg: (self._loading_overlay.hide(), self.statusBar().showMessage(f'渲染失败：{msg}'))
-        )
-        self._render_thread.started.connect(self._render_worker.run)
-        self._render_thread.start()
 
     def _apply_render_result(self, body, toc, title):
         """应用渲染结果到 WebView"""
@@ -2247,12 +2207,7 @@ class TypeRedWindow(QMainWindow):
                 return
         if self._pending_scroll_ratio is not None:
             QTimer.singleShot(120, self._sync_preview_scroll)
-        thread = getattr(self, '_render_thread', None)
-        if thread is not None:
-            thread.quit()
-            thread.wait(100)
-            self._render_thread = None
-            self._render_worker = None
+
 
     def _update_title(self):
         if self.current_file:
