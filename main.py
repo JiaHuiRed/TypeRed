@@ -2233,6 +2233,8 @@ class TypeRedWindow(QMainWindow):
     def _apply_render_result(self, body, toc, title):
         """应用渲染结果到 WebView"""
         self._loading_overlay.hide()
+        if isinstance(toc, list):
+            toc = "".join(toc)
         if self.current_file:
             base_url = QUrl.fromLocalFile(os.path.dirname(self.current_file) + '/')
         else:
