@@ -28,4 +28,4 @@ tw2, th2 = right2 - left2, bottom2 - top2
 draw.text(((W - tw2) // 2, (H - th2) // 2 + 28), "加载中…", fill=(255, 255, 255, 160), font=font2)
 
 img.save("splash.png")
-print("splash.png 生成完毕")
+print("splash.png done")

@@ -51,7 +51,7 @@ from PySide6.QtGui import (
     QMouseEvent, QAction, QTextCursor, QTextDocument, QRegion, QDesktopServices, QMovie,
 )
 
-VERSION  = "0.7.0"
+VERSION  = "0.7.1"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 MAX_RECENT = 10
@@ -1397,6 +1397,9 @@ class TypeRedWindow(QMainWindow):
                 QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
             )
             if ret == QMessageBox.Save:
+                # 同步编辑器最新内容到 td
+                if idx == self._current_tab_idx and self._edit_mode:
+                    td.text = self.editor.toPlainText()
                 path = td.path
                 if not path:
                     path, _ = QFileDialog.getSaveFileName(
@@ -1640,14 +1643,32 @@ class TypeRedWindow(QMainWindow):
         self._settings.setValue('last_file', self.current_file)
 
     def closeEvent(self, e):
-        if self._modified:
+        # 先把编辑器最新内容同步到当前标签
+        cur = self._tab()
+        if cur is not None and self._edit_mode:
+            cur.text = self.editor.toPlainText()
+            cur.modified = self._modified
+
+        # 收集所有未保存的标签
+        unsaved = [i for i, td in enumerate(self._tabs) if td.modified]
+        if not unsaved:
+            self._save_state()
+            super().closeEvent(e)
+            return
+
+        # 逐个询问
+        for idx in unsaved:
+            td = self._tabs[idx]
+            name = os.path.basename(td.path) if td.path else 'untitled.md'
             ret = QMessageBox.question(
                 self, '未保存的更改',
-                '当前文件有未保存的更改，是否保存？',
+                f'「{name}」有未保存的更改，是否保存？',
                 QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
                 QMessageBox.Save,
             )
             if ret == QMessageBox.Save:
+                if idx != self._current_tab_idx:
+                    self._switch_to_tab(idx)
                 self.save_file()
                 if self._modified:
                     e.ignore()
@@ -1655,8 +1676,11 @@ class TypeRedWindow(QMainWindow):
             elif ret == QMessageBox.Cancel:
                 e.ignore()
                 return
+            # Discard → 继续下一个
+
         self._save_state()
         super().closeEvent(e)
+
 
     # ── 最近文件 ──────────────────────────────────────────────────────────────
 

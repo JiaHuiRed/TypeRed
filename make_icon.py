@@ -42,4 +42,4 @@ images[-1].save(
     sizes=[(s, s) for s in SIZES],
     append_images=images[:-1],
 )
-print(f'TypeRed.ico 生成完毕 — {len(SIZES)} 个尺寸: {SIZES}')
+print(f'TypeRed.ico done — {len(SIZES)} sizes: {SIZES}')
