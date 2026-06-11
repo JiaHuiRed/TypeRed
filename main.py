@@ -683,7 +683,7 @@ class TitleBar(QWidget):
         super().__init__(win)
         self._win      = win
         self._drag_pos = None
-        self.setFixedHeight(38)
+        self.setFixedHeight(32)
         self.setObjectName('titlebar')
 
         root = QHBoxLayout(self)
@@ -735,7 +735,7 @@ class TitleBar(QWidget):
         # #260601 Red 0.6.2 标题栏透明，桌面穿透
         self.setStyleSheet("""
             TitleBar { background: transparent; border-bottom: 1px solid rgba(200,200,200,0.3); }
-            #tb_title { color: #2a2a2a; font-size: 13px; font-weight: 600; }
+            #tb_title { color: #2a2a2a; font-size: 12px; font-weight: 600; }
         """)
         self._btn_normal_style = """
             QPushButton {
@@ -1504,7 +1504,7 @@ class TypeRedWindow(QMainWindow):
                 background: transparent;
                 color: {fg};
                 border: none;
-                padding: 5px 12px;
+                padding: 3px 10px;
                 min-width: 40px;
             }}
             QTabBar::tab:selected {{
@@ -2206,6 +2206,50 @@ class TypeRedWindow(QMainWindow):
                 self.statusBar().showMessage(f'渲染失败：{ex}')
                 return
             self._apply_render_result(body, toc, title)
+
+
+    def _start_render_worker(self, text, title):
+        """启动后台渲染线程"""
+        from PySide6.QtCore import QThread
+        old_thread = getattr(self, '_render_thread', None)
+        if old_thread is not None:
+            old_thread.quit()
+            old_thread.wait(200)
+        self._render_text = text
+        self._render_title = title
+        self._render_thread = QThread()
+        self._render_worker = _RenderWorker(text)
+        self._render_worker.moveToThread(self._render_thread)
+        self._render_worker.finished.connect(
+            lambda body, toc: self._apply_render_result(body, toc, title)
+        )
+        self._render_worker.error.connect(
+            lambda msg: (self._loading_overlay.hide(), self.statusBar().showMessage(f'渲染失败：{msg}'))
+        )
+        self._render_thread.started.connect(self._render_worker.run)
+        self._render_thread.start()
+
+    def _apply_render_result(self, body, toc, title):
+        """应用渲染结果到 WebView"""
+        self._loading_overlay.hide()
+        if self.current_file:
+            base_url = QUrl.fromLocalFile(os.path.dirname(self.current_file) + '/')
+        else:
+            base_url = QUrl(f'file:///{BASE_DIR}/')
+        if self.view:
+            try:
+                self.view.setHtml(build_page(body, toc, self.theme, title, is_xmind=self._is_xmind), base_url)
+            except Exception as ex:
+                self.statusBar().showMessage(f'渲染失败：{ex}')
+                return
+        if self._pending_scroll_ratio is not None:
+            QTimer.singleShot(120, self._sync_preview_scroll)
+        thread = getattr(self, '_render_thread', None)
+        if thread is not None:
+            thread.quit()
+            thread.wait(100)
+            self._render_thread = None
+            self._render_worker = None
 
     def _update_title(self):
         if self.current_file:
