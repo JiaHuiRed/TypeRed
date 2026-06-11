@@ -1721,6 +1721,24 @@ class TypeRedWindow(QMainWindow):
 
     # ── 快捷键 ────────────────────────────────────────────────────────────────
 
+
+    def _goto_line(self):
+        """Ctrl+G 跳转到指定行"""
+        if not self._edit_mode:
+            return
+        from PySide6.QtWidgets import QInputDialog
+        total = self.editor.blockCount()
+        line, ok = QInputDialog.getInt(
+            self, '跳转到行', f'行号 (1-{total}):',
+            self.editor.textCursor().blockNumber() + 1, 1, total
+        )
+        if ok:
+            cursor = self.editor.textCursor()
+            cursor.movePosition(cursor.MoveOperation.Start)
+            cursor.movePosition(cursor.MoveOperation.Down, cursor.MoveMode.MoveAnchor, line - 1)
+            self.editor.setTextCursor(cursor)
+            self.editor.centerCursor()
+
     def _register_shortcuts(self):
         QShortcut(QKeySequence('Ctrl+N'),       self).activated.connect(self._new_file)
         QShortcut(QKeySequence('Ctrl+O'),       self).activated.connect(self.open_file_dialog)
