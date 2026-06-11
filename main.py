@@ -43,7 +43,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import (
     Qt, QUrl, QPointF, QRectF, QRect, QEvent, QObject,
-    QFileSystemWatcher, QSettings, QSize, QPoint, QTimer,
+    QFileSystemWatcher, QSettings, QSize, QPoint, QTimer, Signal,
 )
 from PySide6.QtGui import (
     QIcon, QDragEnterEvent, QDropEvent, QKeySequence, QShortcut,
@@ -51,7 +51,7 @@ from PySide6.QtGui import (
     QMouseEvent, QAction, QTextCursor, QTextDocument, QRegion, QDesktopServices, QMovie,
 )
 
-VERSION  = "0.7.2"
+VERSION  = "0.7.3"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 MAX_RECENT = 10
@@ -1171,6 +1171,22 @@ class _EdgeOverlay(QWidget):
 # ── 主窗口 ────────────────────────────────────────────────────────────────────
 
 
+class _RenderWorker(QObject):
+    """后台 Markdown 渲染线程"""
+    finished = Signal(str, list)  # body, toc
+    error    = Signal(str)
+
+    def __init__(self, text: str):
+        super().__init__()
+        self._text = text
+
+    def run(self):
+        try:
+            body, toc = render_markdown(self._text)
+            self.finished.emit(body, toc)
+        except Exception as ex:
+            self.error.emit(str(ex))
+
 class TypeRedWindow(QMainWindow):
     def __init__(self, app_icon: QIcon, initial_file: str = ''):
         super().__init__()
@@ -1718,6 +1734,7 @@ class TypeRedWindow(QMainWindow):
         QShortcut(QKeySequence('Ctrl+Shift+S'), self).activated.connect(self._save_as_file)
         QShortcut(QKeySequence('Ctrl+Shift+T'), self).activated.connect(self._insert_table_dialog)
         QShortcut(QKeySequence('Escape'),       self).activated.connect(self.search_bar.hide_bar)
+        QShortcut(QKeySequence('Ctrl+G'),       self).activated.connect(self._goto_line)
         QShortcut(QKeySequence('Alt+Left'),     self).activated.connect(self._nav_back)
         QShortcut(QKeySequence('Alt+Right'),    self).activated.connect(self._nav_forward)
 
@@ -2160,25 +2177,17 @@ class TypeRedWindow(QMainWindow):
         self._loading_overlay.raise_()
         self._loading_overlay.repaint()
 
-        try:
-            body, toc = render_markdown(text)
-        except Exception as ex:
-            self._loading_overlay.hide()
-            self.statusBar().showMessage(f'渲染失败：{ex}')
-            return
-        self._loading_overlay.hide()
-        if self.current_file:
-            base_url = QUrl.fromLocalFile(os.path.dirname(self.current_file) + '/')
+        # 大文件 (>10KB) 用后台线程渲染，小文件直接渲染避免线程开销
+        if len(text.encode('utf-8')) > 10240:
+            self._start_render_worker(text, title)
         else:
-            base_url = QUrl(f'file:///{BASE_DIR}/')
-        if self.view:
             try:
-                self.view.setHtml(build_page(body, toc, self.theme, title, is_xmind=self._is_xmind), base_url)
+                body, toc = render_markdown(text)
             except Exception as ex:
+                self._loading_overlay.hide()
                 self.statusBar().showMessage(f'渲染失败：{ex}')
                 return
-        if self._pending_scroll_ratio is not None:
-            QTimer.singleShot(120, self._sync_preview_scroll)
+            self._apply_render_result(body, toc, title)
 
     def _update_title(self):
         if self.current_file:
