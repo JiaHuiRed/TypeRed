@@ -51,7 +51,7 @@ from PySide6.QtGui import (
     QMouseEvent, QAction, QTextCursor, QTextDocument, QRegion, QDesktopServices, QMovie,
 )
 
-VERSION  = "0.7.1"
+VERSION  = "0.7.2"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 MAX_RECENT = 10
@@ -545,8 +545,8 @@ class Editor(QPlainTextEdit):
         if e.key() == Qt.Key_I and e.modifiers() == Qt.ControlModifier:
             self._wrap('*')
             return
-        # Ctrl+Shift+S 删除线
-        if e.key() == Qt.Key_S and e.modifiers() == (Qt.ControlModifier | Qt.ShiftModifier):
+        # Ctrl+Alt+S 删除线
+        if e.key() == Qt.Key_S and e.modifiers() == (Qt.ControlModifier | Qt.AltModifier):
             self._wrap('~~')
             return
         # Ctrl+Shift+H 高亮
@@ -978,12 +978,17 @@ class SearchBar(QWidget):
         find_text    = self.input.text()
         replace_text = self.replace_input.text()
         text  = self._editor.toPlainText()
-        count = text.count(find_text)
+        # 根据大小写/全词开关构建替换模式
+        flags = re.IGNORECASE if not self._case_sensitive else 0
+        if self._whole_word:
+            pattern = r'\b' + re.escape(find_text) + r'\b'
+        else:
+            pattern = re.escape(find_text)
+        new_text, count = re.subn(pattern, replace_text, text, flags=flags)
         if count == 0:
             self._win.statusBar().showMessage('未找到匹配项')
             return
         cur_pos  = self._editor.textCursor().position()
-        new_text = text.replace(find_text, replace_text)
         self._editor.setPlainText(new_text)
         cur = self._editor.textCursor()
         cur.setPosition(min(cur_pos, len(new_text)))
@@ -1164,6 +1169,7 @@ class _EdgeOverlay(QWidget):
 
 
 # ── 主窗口 ────────────────────────────────────────────────────────────────────
+
 
 class TypeRedWindow(QMainWindow):
     def __init__(self, app_icon: QIcon, initial_file: str = ''):
@@ -1709,6 +1715,7 @@ class TypeRedWindow(QMainWindow):
         QShortcut(QKeySequence('Ctrl+R'),       self).activated.connect(self._reload_from_disk)
         QShortcut(QKeySequence('Ctrl+E'),       self).activated.connect(self.toggle_edit)
         QShortcut(QKeySequence('Ctrl+S'),       self).activated.connect(self.save_file)
+        QShortcut(QKeySequence('Ctrl+Shift+S'), self).activated.connect(self._save_as_file)
         QShortcut(QKeySequence('Ctrl+Shift+T'), self).activated.connect(self._insert_table_dialog)
         QShortcut(QKeySequence('Escape'),       self).activated.connect(self.search_bar.hide_bar)
         QShortcut(QKeySequence('Alt+Left'),     self).activated.connect(self._nav_back)
@@ -1987,6 +1994,7 @@ class TypeRedWindow(QMainWindow):
             self._resume_watcher()
             return
         self._resume_watcher()
+        self._skip_next_watch = True
         self._current_text = text
         self._modified = False
         td = self._tab()
@@ -1999,10 +2007,20 @@ class TypeRedWindow(QMainWindow):
         )
 
     def _on_file_changed(self, path: str):
-        if path == self.current_file and os.path.isfile(path) and not self._modified:
-            self.load_file(path)
+        if path != self.current_file or not os.path.isfile(path):
+            return
+        if self._modified:
+            return
+        # 跳过 autosave 自身触发的变更
+        if getattr(self, '_skip_next_watch', False):
+            self._skip_next_watch = False
             if path not in self._watcher.files():
                 self._watcher.addPath(path)
+            return
+        # 显示提示而非静默覆盖
+        self.statusBar().showMessage(
+            '文件已被外部修改 — Ctrl+R 刷新', 8000
+        )
 
     # ── 编辑模式 ──────────────────────────────────────────────────────────────
 
@@ -2127,8 +2145,8 @@ class TypeRedWindow(QMainWindow):
         if not text and not self.current_file:
             return
         title = os.path.basename(self.current_file) if self.current_file else APP_NAME
-        # 用 hash 代替全文比较，O(1) 而非 O(n)
-        key = (self.theme, title, hash(text))
+        # 用 len+hash 双重校验代替全文比较
+        key = (self.theme, title, len(text), hash(text))
         if key == getattr(self, '_last_render_key', None):
             self._sync_preview_from_cursor()
             return
