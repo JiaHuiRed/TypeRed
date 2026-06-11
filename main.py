@@ -51,7 +51,7 @@ from PySide6.QtGui import (
     QMouseEvent, QAction, QTextCursor, QTextDocument, QRegion, QDesktopServices, QMovie,
 )
 
-VERSION  = "0.7.3"
+VERSION  = "0.7.4"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 MAX_RECENT = 10
@@ -64,7 +64,7 @@ THEME_NAMES = ['默认',  '护眼',    '米黄',  '暗色', '夜间']
 
 # (bg, fg, divider_border, btn_border, btn_fg)
 THEME_TB: dict[str, tuple[str, str, str, str, str]] = {
-    'light':    ('#ececec', '#2a2a2a', '#d0d0d0', '#b8b8b8', '#2a2a2a'),
+    'light':    ('#f5f5f5', '#1a1a1a', '#d5d5d5', '#999999', '#1a1a1a'),
     'eye-care': ('#d8edd8', '#1a2e1a', '#b8d8b8', '#88bb88', '#1a2e1a'),
     'cream':    ('#e8dcc0', '#2c1f0a', '#ccb888', '#aa8844', '#2c1f0a'),
     'dark':     ('#14151e', '#c0caf5', '#2a2b3d', '#5a5c7e', '#dde0ff'),
@@ -72,7 +72,7 @@ THEME_TB: dict[str, tuple[str, str, str, str, str]] = {
 }
 
 THEME_DOT: dict[str, str] = {
-    'light':    '#c8c8c8',
+    'light':    '#a0a0a0',
     'eye-care': '#6db86d',
     'cream':    '#c8a050',
     'dark':     '#5b6aae',
@@ -733,21 +733,22 @@ class TitleBar(QWidget):
 
     def apply_theme(self, theme: str):
         # #260601 Red 0.6.2 标题栏透明，桌面穿透
-        self.setStyleSheet("""
-            TitleBar { background: transparent; border-bottom: 1px solid rgba(200,200,200,0.3); }
-            #tb_title { color: #2a2a2a; font-size: 12px; font-weight: 600; }
+        _, fg, border, btn_border, _ = THEME_TB[theme]
+        self.setStyleSheet(f"""
+            TitleBar {{ background: transparent; border-bottom: 1px solid {border}; }}
+            #tb_title {{ color: {fg}; font-size: 12px; font-weight: 600; }}
         """)
-        self._btn_normal_style = """
-            QPushButton {
+        self._btn_normal_style = f"""
+            QPushButton {{
                 background: transparent;
-                color: #2a2a2a;
-                border: 1px solid rgba(192,192,192,0.3);
+                color: {fg};
+                border: 1px solid {btn_border};
                 border-radius: 5px;
                 font-size: 12px;
                 font-weight: 500;
-            }
-            QPushButton:hover   { background: rgba(255,255,255,0.3); }
-            QPushButton:pressed { background: rgba(200,200,200,0.4); }
+            }}
+            QPushButton:hover   {{ background: rgba(128,128,128,0.15); }}
+            QPushButton:pressed {{ background: rgba(128,128,128,0.25); }}
         """
         for btn in (self.btn_edit, self.btn_recent, self.btn_open):
             btn.setStyleSheet(self._btn_normal_style)
@@ -2291,7 +2292,7 @@ class TypeRedWindow(QMainWindow):
         self._apply_tab_theme(theme)
         #260525 Red 猫猫边框跟随主题
         _, _, border, _, _ = THEME_TB[theme]
-        self._cat_label.setStyleSheet(f'border: 1px solid {border}; border-radius: 10px;')
+        self._cat_label.setStyleSheet('border-radius: 10px;')
         if self.current_file or self._edit_mode:
             self._update_preview()
         else:
