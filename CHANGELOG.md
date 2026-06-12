@@ -7,6 +7,15 @@
 
 ---
 
+## [0.7.5] - 2026-06-12
+
+### 优化
+
+- **消除 getattr 反模式**：`_last_render_key`、`_pending_scroll_ratio`、`_skip_next_watch` 提到 `__init__` 初始化，消除 6 处 `getattr(self, ...)` 运行时开销
+- **Pygments CSS 缓存**：每个主题的代码高亮 CSS 只生成一次，后续渲染复用缓存，减少字符串拼接和 `HtmlFormatter` 实例化
+
+---
+
 ## [0.7.4] - 2026-06-11
 
 ### 修复

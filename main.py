@@ -27,7 +27,7 @@ import math
 import html
 import ctypes
 from dataclasses import dataclass, field
-from functools import lru_cache
+
 
 import emoji
 import mistune
@@ -51,7 +51,7 @@ from PySide6.QtGui import (
     QMouseEvent, QAction, QTextCursor, QTextDocument, QRegion, QDesktopServices, QMovie,
 )
 
-VERSION  = "0.7.4"
+VERSION  = "0.7.5"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 MAX_RECENT = 10
@@ -247,12 +247,16 @@ def render_markdown(text: str) -> tuple[str, str]:
     return body, toc
 
 
-@lru_cache(maxsize=8)
+_PYG_CACHE: dict[str, str] = {}
+
+
 def pygments_css(theme: str) -> str:
-    try:
-        return HtmlFormatter(style=THEME_PYG.get(theme, 'friendly')).get_style_defs('.codehilite')
-    except Exception:
-        return ''
+    if theme not in _PYG_CACHE:
+        try:
+            _PYG_CACHE[theme] = HtmlFormatter(style=THEME_PYG.get(theme, 'friendly')).get_style_defs('.codehilite')
+        except Exception:
+            _PYG_CACHE[theme] = ''
+    return _PYG_CACHE[theme]
 
 
 # ── XMind 思维导图解析 ─────────────────────────────────────────────────────────
@@ -1186,6 +1190,9 @@ class TypeRedWindow(QMainWindow):
         self._edit_mode       = False
         self._restore_last    = ''
         self._cached_text     = ''
+        self._last_render_key = None
+        self._pending_scroll_ratio = None
+        self._skip_next_watch = False
         self._is_xmind        = False
         self._tabs: list[_TabData] = []
         self._current_tab_idx = -1
@@ -2032,7 +2039,7 @@ class TypeRedWindow(QMainWindow):
         if self._modified:
             return
         # 跳过 autosave 自身触发的变更
-        if getattr(self, '_skip_next_watch', False):
+        if self._skip_next_watch:
             self._skip_next_watch = False
             if path not in self._watcher.files():
                 self._watcher.addPath(path)
@@ -2057,7 +2064,7 @@ class TypeRedWindow(QMainWindow):
             self.editor.setFocus()
         else:
             self._edit_mode = False
-            text = getattr(self, '_cached_text', '') or self.editor.toPlainText()
+            text = self._cached_text or self.editor.toPlainText()
             self._current_text = text
             td = self._tab()
             if td:
@@ -2135,7 +2142,7 @@ class TypeRedWindow(QMainWindow):
         )
 
     def _sync_preview_scroll(self):
-        ratio = getattr(self, '_pending_scroll_ratio', None)
+        ratio = self._pending_scroll_ratio
         if ratio is None:
             return
         self._pending_scroll_ratio = None
@@ -2150,7 +2157,7 @@ class TypeRedWindow(QMainWindow):
     def _sync_preview_from_cursor(self):
         if not self._edit_mode:
             return
-        text = getattr(self, '_cached_text', '') or self.editor.toPlainText()
+        text = self._cached_text or self.editor.toPlainText()
         if not text:
             return
         ratio = self.editor.textCursor().position() / max(len(text), 1)
@@ -2159,7 +2166,7 @@ class TypeRedWindow(QMainWindow):
 
     def _update_preview(self):
         if self._edit_mode:
-            text = getattr(self, '_cached_text', '') or self.editor.toPlainText()
+            text = self._cached_text or self.editor.toPlainText()
         else:
             text = self._current_text
         if not text and not self.current_file:
@@ -2167,7 +2174,7 @@ class TypeRedWindow(QMainWindow):
         title = os.path.basename(self.current_file) if self.current_file else APP_NAME
         # 用 len+hash 双重校验代替全文比较
         key = (self.theme, title, len(text), hash(text))
-        if key == getattr(self, '_last_render_key', None):
+        if key == self._last_render_key:
             self._sync_preview_from_cursor()
             return
         self._last_render_key = key
