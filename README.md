@@ -9,13 +9,13 @@
 
 ---
 
-## 简介
+## 📖 简介
 
 TypeRed 是一个轻量级本地 Markdown 阅读 / 编辑器，基于 **PySide6 + QWebEngineView**，用 **mistune** 代替 `python-markdown` 实现 5-10x 渲染加速。
 
 支持原生毛玻璃窗口（桌面壁纸穿透）、XMind 思维导图、5 种主题、分屏编辑、实时预览、语法高亮。
 
-## 特色
+## ✨ 特色
 
 - **毛玻璃窗口** — `WA_TranslucentBackground` 实现桌面壁纸穿透，标题栏/搜索栏/状态栏半透明
 - **mistune 渲染引擎** — 原生 C 扩展加速，大文件渲染 5-10x 提升
@@ -25,7 +25,6 @@ TypeRed 是一个轻量级本地 Markdown 阅读 / 编辑器，基于 **PySide6 
 - **代码高亮** — Pygments 语法高亮，跟随主题色
 - **分屏编辑** — `Ctrl+E` 切换编辑模式，400ms 实时预览 + 同步滚动
 - **格式快捷键** — 粗体/斜体/删除线/高亮/上下标/标题/列表
-- **猫猫动画** — 打字时猫猫弹跳，空闲时 GIF 循环
 - **猫猫动画** — 打字时猫猫弹跳，空闲时 GIF 循环
 - **Emoji 短代码** — `:smile:` → 😄、`:rocket:` → 🚀，完整 emoji 词汇表支持
 - **智能排版** — `...` → …、`--` → —、`->` → → 等，代码块内不受影响
@@ -37,7 +36,7 @@ TypeRed 是一个轻量级本地 Markdown 阅读 / 编辑器，基于 **PySide6 
 - **Ctrl+N 新建文件** — 快速创建空白 untitled 文件，自动进入编辑模式
 - **常驻状态栏** — 始终显示行数、文件大小、词数、字符数，不再一闪而过
 
-## 环境要求
+## 🖥️ 环境要求
 
 | 项目 | 要求 |
 |------|------|
@@ -47,7 +46,7 @@ TypeRed 是一个轻量级本地 Markdown 阅读 / 编辑器，基于 **PySide6 
 
 > 如果报 `DLL load failed`，通常是缺少 VC++ Redistributable。
 
-## 快捷使用
+## 🚀 快捷使用
 
 ```bash
 pip install -r requirements.txt
@@ -56,7 +55,7 @@ python main.py path/to/file.md          # 直接打开文件
 python main.py path/to/file.xmind       # 打开思维导图
 ```
 
-## 打包 exe
+## 📦 打包 exe
 
 ```bash
 build.bat
@@ -64,7 +63,7 @@ build.bat
 
 输出 `dist/TypeRed.exe`（单文件，无需 Python 环境）。首次需要 `pip install pyinstaller`。
 
-## 快捷键
+## ⌨️ 快捷键
 
 | 快捷键 | 功能 |
 |--------|------|
@@ -89,7 +88,7 @@ build.bat
 | `Ctrl+Shift+U` / `Ctrl+Shift+O` | 无序/有序列表 |
 | `Tab` / `Shift+Tab` | 缩进 |
 
-## 版本历史
+## 📜 版本历史
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
@@ -124,7 +123,7 @@ build.bat
 
 > 完整变更日志参见 [CHANGELOG.md](CHANGELOG.md)。
 
-## 版本规则
+## 📏 版本规则
 
 - 小改动：`0.0.x`（bug 修复、细节调整）
 - 中改动：`0.x.0`（新功能、较大改动）
