@@ -26,6 +26,7 @@ import re
 import math
 import html
 import ctypes
+import tempfile
 from dataclasses import dataclass, field
 
 
@@ -44,6 +45,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import (
     Qt, QUrl, QPointF, QRectF, QRect, QEvent, QObject,
     QFileSystemWatcher, QSettings, QSize, QPoint, QTimer,
+    QThread, Signal,
 )
 from PySide6.QtGui import (
     QIcon, QDragEnterEvent, QDropEvent, QKeySequence, QShortcut,
@@ -51,7 +53,7 @@ from PySide6.QtGui import (
     QMouseEvent, QAction, QTextCursor, QTextDocument, QRegion, QDesktopServices, QMovie,
 )
 
-VERSION  = "0.7.5"
+VERSION  = "0.7.6"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 MAX_RECENT = 10
@@ -228,15 +230,7 @@ def _typograph(text: str) -> str:
 
 def render_markdown(text: str) -> tuple[str, str]:
     if not hasattr(render_markdown, '_md'):
-        inline = mistune.InlineParser(hard_wrap=True)
-        plugins = [mistune.plugins.import_plugin(p) for p in [
-            'speedup', 'table', 'footnotes', 'def_list', 'abbr',
-            'mark', 'superscript', 'subscript', 'strikethrough',
-            'task_lists', 'url',
-        ]]
-        render_markdown._md = mistune.Markdown(
-            renderer=TypeRedRenderer(), inline=inline, plugins=plugins,
-        )
+        render_markdown._md = _create_md_instance()
     md = render_markdown._md
     md.renderer.reset_toc()
     text = emoji.emojize(text, language='alias')
@@ -245,6 +239,43 @@ def render_markdown(text: str) -> tuple[str, str]:
     body = _typograph(body)
     toc = build_toc(md.renderer.toc_entries)
     return body, toc
+
+
+def _create_md_instance():
+    """创建独立的 mistune Markdown 实例（线程安全）。"""
+    inline = mistune.InlineParser(hard_wrap=True)
+    plugins = [mistune.plugins.import_plugin(p) for p in [
+        'speedup', 'table', 'footnotes', 'def_list', 'abbr',
+        'mark', 'superscript', 'subscript', 'strikethrough',
+        'task_lists', 'url',
+    ]]
+    return mistune.Markdown(
+        renderer=TypeRedRenderer(), inline=inline, plugins=plugins,
+    )
+
+
+class _RenderWorker(QThread):
+    """后台线程执行 Markdown 渲染，避免大文件阻塞 UI。"""
+    finished = Signal(str, str, str)  # body, toc, title
+
+    def __init__(self, text: str, title: str, parent=None):
+        super().__init__(parent)
+        self._text = text
+        self._title = title
+
+    def run(self):
+        try:
+            # 使用独立实例避免与主线程 render_markdown 竞争
+            md = _create_md_instance()
+            md.renderer.reset_toc()
+            text = emoji.emojize(self._text, language='alias')
+            text = re.sub(r"</?div[^>]*>", "", text)
+            body = md(text)
+            body = _typograph(body)
+            toc = build_toc(md.renderer.toc_entries)
+        except Exception as ex:
+            body, toc = f'<p style="color:red">渲染失败：{ex}</p>', ''
+        self.finished.emit(body, toc, self._title)
 
 
 _PYG_CACHE: dict[str, str] = {}
@@ -2187,13 +2218,30 @@ class TypeRedWindow(QMainWindow):
         self._loading_overlay.raise_()
         self._loading_overlay.repaint()
 
-        try:
-            body, toc = render_markdown(text)
-        except Exception as ex:
-            self._loading_overlay.hide()
-            self.statusBar().showMessage(f'渲染失败：{ex}')
-            return
-        self._apply_render_result(body, toc, title)
+        # 大文件（>256KB）用后台线程渲染，小文件同步渲染避免线程开销
+        if len(text) > 256 * 1024:
+            self._start_async_render(text, title)
+        else:
+            try:
+                body, toc = render_markdown(text)
+            except Exception as ex:
+                self._loading_overlay.hide()
+                self.statusBar().showMessage(f'渲染失败：{ex}')
+                return
+            self._apply_render_result(body, toc, title)
+
+    def _start_async_render(self, text: str, title: str):
+        """在后台线程中渲染 Markdown，UI 保持响应。"""
+        # 如果上一个 worker 还在跑，断开信号（结果作废）
+        old = getattr(self, '_render_worker', None)
+        if old is not None and old.isRunning():
+            old.finished.disconnect()
+            old.quit()
+            old.wait(200)
+        worker = _RenderWorker(text, title, parent=self)
+        worker.finished.connect(self._on_async_render_done)
+        self._render_worker = worker
+        worker.start()
 
 
 
@@ -2202,19 +2250,38 @@ class TypeRedWindow(QMainWindow):
         self._loading_overlay.hide()
         if isinstance(toc, list):
             toc = "".join(toc)
-        if self.current_file:
-            base_url = QUrl.fromLocalFile(os.path.dirname(self.current_file) + '/')
-        else:
-            base_url = QUrl(f'file:///{BASE_DIR}/')
-        if self.view:
-            try:
-                self.view.setHtml(build_page(body, toc, self.theme, title, is_xmind=self._is_xmind), base_url)
-            except Exception as ex:
-                self.statusBar().showMessage(f'渲染失败：{ex}')
-                return
+        if not self.view:
+            return
+        page_html = build_page(body, toc, self.theme, title, is_xmind=self._is_xmind)
+        try:
+            # Chromium setHtml 有 ~2MB 限制，超过时写临时文件用 load() 加载
+            if len(page_html) > 1_500_000:
+                # 注入 <base> 标签使图片等相对路径仍能解析
+                if self.current_file:
+                    base_dir = os.path.dirname(self.current_file).replace('\\', '/')
+                    base_tag = f'<base href="file:///{base_dir}/">'
+                else:
+                    base_tag = f'<base href="file:///{BASE_DIR}/">'
+                page_html = page_html.replace('<head>', f'<head>{base_tag}', 1)
+                tmp = os.path.join(tempfile.gettempdir(), 'typered_preview.html')
+                with open(tmp, 'w', encoding='utf-8') as f:
+                    f.write(page_html)
+                self.view.load(QUrl.fromLocalFile(tmp))
+            else:
+                if self.current_file:
+                    base_url = QUrl.fromLocalFile(os.path.dirname(self.current_file) + '/')
+                else:
+                    base_url = QUrl(f'file:///{BASE_DIR}/')
+                self.view.setHtml(page_html, base_url)
+        except Exception as ex:
+            self.statusBar().showMessage(f'渲染失败：{ex}')
+            return
         if self._pending_scroll_ratio is not None:
             QTimer.singleShot(120, self._sync_preview_scroll)
 
+    def _on_async_render_done(self, body: str, toc: str, title: str):
+        """后台渲染完成，在主线程应用结果。"""
+        self._apply_render_result(body, toc, title)
 
     def _update_title(self):
         if self.current_file:
