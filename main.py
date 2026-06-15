@@ -53,11 +53,14 @@ from PySide6.QtGui import (
     QMouseEvent, QAction, QTextCursor, QTextDocument, QRegion, QDesktopServices, QMovie,
 )
 
-VERSION  = "0.7.6"
+VERSION  = "0.7.8"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 MAX_RECENT = 10
 SUPPORTED_EXTS = ('.md', '.markdown', '.mdown', '.txt', '.xmind')
+# 渐进渲染阈值：>50KB 启用分块，>256KB 异步渲染
+CHUNK_THRESHOLD = 50 * 1024
+CHUNK_INITIAL = 5  # 首屏渲染块数
 
 # ── 主题定义 ──────────────────────────────────────────────────────────────────
 
@@ -118,6 +121,7 @@ class _TabData:
     is_xmind: bool = False
     nav_history: list = field(default_factory=list)
     nav_idx: int = -1
+    render_key = None          # _last_render_key 快照，切标签免重渲染
 
 
 # ── 程序化图标 ────────────────────────────────────────────────────────────────
@@ -228,6 +232,90 @@ def _typograph(text: str) -> str:
     return ''.join(parts)
 
 
+# ── 块级拆分与渐进渲染 ─────────────────────────────────────────────────────────
+#//#260615 Red 0.7.7 大文档分块渐进加载
+
+def _smart_split_markdown(text: str) -> list[str]:
+    """在空白行处拆分 Markdown 为逻辑块，感知代码围栏。"""
+    lines = text.split('\n')
+    blocks = []
+    current = []
+    in_code = False
+    for line in lines:
+        s = line.strip()
+        if s.startswith('```') or s.startswith('~~~'):
+            in_code = not in_code
+            current.append(line)
+            continue
+        if not s and not in_code:
+            if current:
+                blocks.append('\n'.join(current))
+                current = []
+            continue
+        current.append(line)
+    if current:
+        blocks.append('\n'.join(current))
+    return blocks
+
+
+def _chunk_rendered_html(body: str, chunk_size: int = 30) -> list[str]:
+    """将渲染后的 HTML 按顶层块级元素切分成块，用于渐进加载。
+
+    通过跟踪标签嵌套深度正确识别顶层元素边界（含 <ul>/<blockquote>/<pre> 等嵌套结构）。
+    """
+    TOP_TAGS = {'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'div', 'pre',
+                'ul', 'ol', 'blockquote', 'table', 'hr', 'figure', 'dl'}
+    any_tag = re.compile(r'<(/?)(\w+)[^>]*?(/?)>')
+
+    stack: list[str] = []
+    split_points = [0]
+
+    for match in any_tag.finditer(body):
+        tag = match.group(2).lower()
+        if tag not in TOP_TAGS:
+            continue
+        is_closing = bool(match.group(1))
+        is_self_closing = bool(match.group(3))
+        if is_closing:
+            if stack and stack[-1] == tag:
+                stack.pop()
+                if not stack:
+                    split_points.append(match.end())
+        elif not is_self_closing:
+            if not stack:
+                # 新顶层元素开始 —— split_points 已在前面记录
+                pass
+            stack.append(tag)
+
+    blocks = []
+    for i in range(len(split_points) - 1):
+        blk = body[split_points[i]:split_points[i + 1]].strip()
+        if blk:
+            blocks.append(blk)
+    if split_points and split_points[-1] < len(body):
+        trailing = body[split_points[-1]:].strip()
+        if trailing:
+            blocks.append(trailing)
+
+    return ['\n'.join(blocks[i:i + chunk_size]) for i in range(0, len(blocks), chunk_size)]
+
+
+def render_chunked(text: str, initial_chunks: int = 5) -> tuple[str, str, str]:
+    """分块渲染：全量渲染获取正确 HTML + TOC，然后切块供渐进加载。
+
+    Returns:
+        (initial_body_html, remaining_chunks_json, toc_html)
+    """
+    import json
+    body, toc = render_markdown(text)
+    chunks = _chunk_rendered_html(body)
+    if len(chunks) <= initial_chunks + 1:
+        return body, '[]', toc
+    initial = '\n'.join(chunks[:initial_chunks])
+    remaining = json.dumps(chunks[initial_chunks:])
+    return initial, remaining, toc
+
+
 def render_markdown(text: str) -> tuple[str, str]:
     if not hasattr(render_markdown, '_md'):
         render_markdown._md = _create_md_instance()
@@ -276,6 +364,35 @@ class _RenderWorker(QThread):
         except Exception as ex:
             body, toc = f'<p style="color:red">渲染失败：{ex}</p>', ''
         self.finished.emit(body, toc, self._title)
+
+
+class _ChunkedRenderWorker(QThread):
+    """后台线程执行分块 Markdown 渲染（全量 → 切块 → 渐进加载）。"""
+    finished = Signal(str, str, str)  # initial_body, remaining_json, toc
+
+    def __init__(self, text: str, title: str, parent=None):
+        super().__init__(parent)
+        self._text = text
+        self._title = title
+
+    def run(self):
+        try:
+            # 全量渲染获取正确 TOC 和 heading ID
+            md = _create_md_instance()
+            md.renderer.reset_toc()
+            text = emoji.emojize(self._text, language='alias')
+            text = re.sub(r"</?div[^>]*>", "", text)
+            full_body = md(text)
+            full_body = _typograph(full_body)
+            toc = build_toc(md.renderer.toc_entries)
+            # 切块
+            import json
+            chunks = _chunk_rendered_html(full_body)
+            initial = '\n'.join(chunks[:CHUNK_INITIAL])
+            remaining = json.dumps(chunks[CHUNK_INITIAL:])
+        except Exception as ex:
+            initial, remaining, toc = f'<p style="color:red">渲染失败：{ex}</p>', '[]', ''
+        self.finished.emit(initial, remaining, toc)
 
 
 _PYG_CACHE: dict[str, str] = {}
@@ -395,6 +512,91 @@ def build_page(body: str, toc: str, theme: str, title: str = '', is_xmind: bool 
   <article id="content">{body}</article>
 </div>
 <script>{js_content}</script>
+</body>
+</html>"""
+
+
+# ── 分块页面生成（渐进加载）────────────────────────────────────────────────
+
+_CHUNKED_JS = r"""
+<script>
+(function(){
+'use strict';
+var chunks = %CHUNKS_JSON%;
+var idx = 0, loading = false, BUFFER = 600, BATCH = 5;
+
+function loadMore() {
+  if (loading || idx >= chunks.length) return;
+  var remain = document.body.scrollHeight - (window.innerHeight + window.scrollY);
+  if (remain > BUFFER) return;
+  loading = true;
+  var content = document.getElementById('content');
+  if (!content) { loading = false; return; }
+  for (var i = 0; i < BATCH && idx < chunks.length; i++, idx++) {
+    var d = document.createElement('div');
+    d.innerHTML = chunks[idx];
+    content.appendChild(d);
+  }
+  loading = false;
+  // 如果加载一批后仍不足视口高度，继续加载
+  var r2 = document.body.scrollHeight - (window.innerHeight + window.scrollY);
+  if (r2 < BUFFER && idx < chunks.length) loadMore();
+}
+
+window.addEventListener('scroll', loadMore, {passive:true});
+loadMore();
+
+// TOC 锚点点击时确保目标可见（如果目标在未加载区块中，自动加载到它）
+document.querySelectorAll('#toc a').forEach(function(a){
+  a.addEventListener('click', function(e){
+    var id = this.getAttribute('href').replace(/.*#/, '');
+    var el = document.getElementById(id);
+    if (el) return;
+    // 目标元素不在 DOM 中，逐块加载直到出现
+    (function loadUntil(){
+      if (idx >= chunks.length) return;
+      var content = document.getElementById('content');
+      if (!content) return;
+      for (var i = 0; i < BATCH && idx < chunks.length; i++, idx++) {
+        var d = document.createElement('div');
+        d.innerHTML = chunks[idx];
+        content.appendChild(d);
+      }
+      if (!document.getElementById(id)) loadUntil();
+    })();
+  });
+});
+})();
+</script>
+"""
+
+
+def build_chunked_page(initial_body: str, remaining_json: str, toc: str, theme: str, title: str = '') -> str:
+    """构建带渐进加载的分块预览页面。"""
+    css_content = _load_css()
+    js_content = _load_js()
+    toc_block = f'<nav id="toc">{toc}</nav><div id="toc-resize"></div>' if toc.strip() else ''
+    # 注入分块 JS（替换占位符）
+    loader = _CHUNKED_JS.replace('%CHUNKS_JSON%', remaining_json)
+    return f"""<!DOCTYPE html>
+<html class="{theme}">
+<head>
+<meta charset="utf-8">
+<title>{title}</title>
+<style>{css_content}</style>
+<style>{pygments_css(theme)}</style>
+<style>
+#content-loading {{ text-align:center; padding:2em; color:var(--text-muted); font-size:14px; }}
+</style>
+</head>
+<body>
+<div id="layout">
+  {toc_block}
+  <article id="content">{initial_body}</article>
+</div>
+<div id="content-loading" style="display:{'none' if remaining_json == '[]' else 'block'}">加载中…</div>
+<script>{js_content}</script>
+{loader}
 </body>
 </html>"""
 
@@ -718,6 +920,7 @@ class TitleBar(QWidget):
         super().__init__(win)
         self._win      = win
         self._drag_pos = None
+        self._btn_normal_style = ''
         self.setFixedHeight(32)
         self.setObjectName('titlebar')
 
@@ -831,7 +1034,7 @@ class TitleBar(QWidget):
             """)
         else:
             # 恢复到 apply_theme 时存储的普通样式
-            if hasattr(self, '_btn_normal_style'):
+            if self._btn_normal_style:
                 self.btn_edit.setStyleSheet(self._btn_normal_style)
 
     def mousePressEvent(self, e: QMouseEvent):
@@ -1225,6 +1428,8 @@ class TypeRedWindow(QMainWindow):
         self._pending_scroll_ratio = None
         self._skip_next_watch = False
         self._is_xmind        = False
+        self._render_worker   = None
+        self._chunked_worker  = None
         self._tabs: list[_TabData] = []
         self._current_tab_idx = -1
         self._app_icon        = app_icon
@@ -1492,6 +1697,7 @@ class TypeRedWindow(QMainWindow):
             old.modified = self._modified
             old.nav_history = self._nav_history[:]
             old.nav_idx = self._nav_idx
+            old.render_key = self._last_render_key
 
         self._suspend_watcher()
         self._current_tab_idx = idx
@@ -1504,6 +1710,7 @@ class TypeRedWindow(QMainWindow):
             self._watcher.addPath(td.path)
         self._nav_history = td.nav_history[:]
         self._nav_idx = td.nav_idx
+        self._last_render_key = td.render_key
 
         if self._edit_mode:
             self.editor.blockSignals(True)
@@ -2218,9 +2425,20 @@ class TypeRedWindow(QMainWindow):
         self._loading_overlay.raise_()
         self._loading_overlay.repaint()
 
-        # 大文件（>256KB）用后台线程渲染，小文件同步渲染避免线程开销
+        # 三级渲染策略：
+        #   小文件 ≤50KB  → 同步全量渲染
+        #   中文件 50K-256K → 同步分块渲染（首屏快）
+        #   大文件 >256KB  → 后台线程分块渲染（UI 不冻结）
         if len(text) > 256 * 1024:
-            self._start_async_render(text, title)
+            self._start_chunked_async_render(text, title)
+        elif len(text) > CHUNK_THRESHOLD:
+            try:
+                body, remaining, toc = render_chunked(text, initial_chunks=CHUNK_INITIAL)
+            except Exception as ex:
+                self._loading_overlay.hide()
+                self.statusBar().showMessage(f'渲染失败：{ex}')
+                return
+            self._apply_chunked_result(body, remaining, toc, title)
         else:
             try:
                 body, toc = render_markdown(text)
@@ -2231,9 +2449,8 @@ class TypeRedWindow(QMainWindow):
             self._apply_render_result(body, toc, title)
 
     def _start_async_render(self, text: str, title: str):
-        """在后台线程中渲染 Markdown，UI 保持响应。"""
-        # 如果上一个 worker 还在跑，断开信号（结果作废）
-        old = getattr(self, '_render_worker', None)
+        """在后台线程中渲染 Markdown（全量，兼容 0.7.6 旧路径）。"""
+        old = self._render_worker
         if old is not None and old.isRunning():
             old.finished.disconnect()
             old.quit()
@@ -2243,20 +2460,42 @@ class TypeRedWindow(QMainWindow):
         self._render_worker = worker
         worker.start()
 
-
+    def _start_chunked_async_render(self, text: str, title: str):
+        """后台线程分块渲染，避免大文件阻塞 UI。"""
+        old = self._chunked_worker
+        if old is not None and old.isRunning():
+            old.finished.disconnect()
+            old.quit()
+            old.wait(200)
+        worker = _ChunkedRenderWorker(text, title, parent=self)
+        worker.finished.connect(self._on_chunked_render_done)
+        self._chunked_worker = worker
+        worker.start()
 
     def _apply_render_result(self, body, toc, title):
-        """应用渲染结果到 WebView"""
+        """应用全量渲染结果到 WebView（0.7.6 旧路径）。"""
         self._loading_overlay.hide()
         if isinstance(toc, list):
             toc = "".join(toc)
         if not self.view:
             return
         page_html = build_page(body, toc, self.theme, title, is_xmind=self._is_xmind)
+        self._set_page_html(page_html)
+
+    def _apply_chunked_result(self, body, remaining_json, toc, title):
+        """应用分块渲染结果到 WebView。"""
+        self._loading_overlay.hide()
+        if isinstance(toc, list):
+            toc = "".join(toc)
+        if not self.view:
+            return
+        page_html = build_chunked_page(body, remaining_json, toc, self.theme, title)
+        self._set_page_html(page_html)
+
+    def _set_page_html(self, page_html: str):
+        """统一 setHtml / load 分发，处理 Chromium 2MB 限制。"""
         try:
-            # Chromium setHtml 有 ~2MB 限制，超过时写临时文件用 load() 加载
             if len(page_html) > 1_500_000:
-                # 注入 <base> 标签使图片等相对路径仍能解析
                 if self.current_file:
                     base_dir = os.path.dirname(self.current_file).replace('\\', '/')
                     base_tag = f'<base href="file:///{base_dir}/">'
@@ -2280,8 +2519,13 @@ class TypeRedWindow(QMainWindow):
             QTimer.singleShot(120, self._sync_preview_scroll)
 
     def _on_async_render_done(self, body: str, toc: str, title: str):
-        """后台渲染完成，在主线程应用结果。"""
+        """后台全量渲染完成。"""
         self._apply_render_result(body, toc, title)
+
+    def _on_chunked_render_done(self, body: str, remaining: str, toc: str):
+        """后台分块渲染完成，自动读取标题。"""
+        title = os.path.basename(self.current_file) if self.current_file else APP_NAME
+        self._apply_chunked_result(body, remaining, toc, title)
 
     def _update_title(self):
         if self.current_file:

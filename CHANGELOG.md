@@ -7,16 +7,33 @@
 
 ---
 
-## [0.7.6] - 2026-06-15
+## [0.7.8] - 2026-06-15
+
+### 修复
+
+- **标签切换渲染缓存穿透**：`_last_render_key` 是全局字段未按标签保存，每次切标签都会触发全量重渲染。`_TabData` 新增 `render_key` 字段，切标签时保存/恢复缓存 key，已渲染的标签切回时直接跳过渲染管道
+- **消除残留 getattr 反模式**：`_start_async_render` 和 `_start_chunked_async_render` 改用 `__init__` 初始化的 `self._render_worker`/`self._chunked_worker`，删除 `getattr(self, ...)` 运行时开销
+- **消除 TitleBar 残留 hasattr**：`_btn_normal_style` 在 `__init__` 初始化，`set_edit_active` 不再使用 `hasattr` 运行时检查
+
+### 优化
+
+- **异步 worker 字段初始化**：`_render_worker` 和 `_chunked_worker` 在 `__init__` 显式初始化为 `None`，避免首次调用时 getattr 兜底路径
+
+---
+
+## [0.7.7] - 2026-06-15
+
+### 优化
+
+- **大文档渐进加载**：超过 50KB 的文档只渲染首屏内容到 WebView，剩余内容随滚动逐步加载。大幅缩短大文档初始打开时间——首屏渲染从"等全部"变为"等可见部分"，QWebEngine DOM 构建时间从 O(全文) 降为 O(视口)
+- **三级渲染策略**：≤50KB 同步全量渲染（零延迟）、50KB–256KB 同步分块渲染、>256KB 后台线程分块渲染（UI 不冻结），按文件大小自动选择最优路径
+- **Tag 深度追踪 HTML 切块**：`_chunk_rendered_html()` 通过跟踪标签嵌套栈精确识别顶层元素边界，正确切分含嵌套的 `<ul>`/`<blockquote>`/`<pre>` 等结构
+- **script.js 事件委托重构**：TOC 跳转/图片放大/任务列表改为事件委托，动态加载的内容块自动继承交互能力
+- **TOC 锚点预加载**：点击 TOC 中尚未渲染的标题，JS 自动加载其所在区块
 
 ### 修复
 
 - **大文件白屏**：`setHtml()` 有 Chromium ~2MB 硬性限制，超大 HTML 静默失败导致白屏；现改为写入临时文件用 `load(QUrl)` 加载，注入 `<base>` 标签保证相对路径正常
-
-### 优化
-
-- **大文件后台渲染**：>256KB 的文件在 QThread 后台线程中执行 Markdown 渲染，UI 线程不再冻结，loading 动画正常显示
-- **渲染实例工厂化**：提取 `_create_md_instance()` 工厂函数，主线程和 Worker 各用独立 mistune 实例，避免线程竞争
 
 ---
 
