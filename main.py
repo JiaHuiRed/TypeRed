@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QLabel, QPushButton, QSizeGrip, QMenu,
     QPlainTextEdit, QSplitter, QLineEdit, QTabBar,
     QDialog, QSpinBox, QFormLayout, QDialogButtonBox, QMessageBox,
+    QTextBrowser,
 )
 from PySide6.QtCore import (
     Qt, QUrl, QPointF, QRectF, QRect, QEvent, QObject,
@@ -53,7 +54,7 @@ from PySide6.QtGui import (
     QMouseEvent, QAction, QTextCursor, QTextDocument, QRegion, QDesktopServices, QMovie,
 )
 
-VERSION  = "0.7.8"
+VERSION  = "0.7.9"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 MAX_RECENT = 10
@@ -1474,14 +1475,18 @@ class TypeRedWindow(QMainWindow):
         self.editor.apply_theme(self.theme)
         self.editor.setVisible(False)
 
-        #260526 Red QWebEngineView 延迟创建——先弹窗，后初始化 WebView
         self.view = None
-        self._view_placeholder = QLabel('  加载中…', alignment=Qt.AlignCenter)
+
+        # QTextBrowser 欢迎页——原生 Qt 组件，即时渲染，无需等 WebView
+        self._welcome_page = QTextBrowser()
+        self._welcome_page.setOpenExternalLinks(True)
+        self._welcome_page.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._build_welcome_page()
 
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.setHandleWidth(1)
         self.splitter.addWidget(self.editor)
-        self.splitter.addWidget(self._view_placeholder)
+        self.splitter.addWidget(self._welcome_page)
 
         self.search_bar = SearchBar(self, self)
         self.search_bar.apply_theme(self.theme)
@@ -1786,14 +1791,6 @@ class TypeRedWindow(QMainWindow):
 
     def showEvent(self, e):
         super().showEvent(e)
-        #260526 Red 关闭 PyInstaller 启动屏
-        try:
-            import pyi_splash
-            pyi_splash.close()
-        except Exception:
-            pass
-        #260526 Red 窗口已弹出，延迟初始化 QWebEngineView
-        QTimer.singleShot(0, self._init_view)
         # 为无边框窗口加 WS_MINIMIZEBOX，使任务栏图标支持点击最小化/还原切换
         try:
             GWL_STYLE        = -16
@@ -1814,42 +1811,8 @@ class TypeRedWindow(QMainWindow):
 
     #260526 Red 延迟初始化 QWebEngineView
     def _init_view(self):
-        from PySide6.QtWebEngineWidgets import QWebEngineView
-        from PySide6.QtWebEngineCore import QWebEnginePage
-        if self.view is not None:
-            return
-        class _Page(QWebEnginePage):
-            def __init__(self, win, parent=None):
-                super().__init__(parent)
-                self._win = win
-            def acceptNavigationRequest(self, url, nav_type, _is_main):
-                if nav_type == QWebEnginePage.NavigationType.NavigationTypeLinkClicked:
-                    path = url.toLocalFile()
-                    if path:
-                        fragment = url.fragment()
-                        if fragment and os.path.normpath(path) == self._win.current_file:
-                            js = f'(function(){{var e=document.getElementById("{fragment}");if(e)e.scrollIntoView({{behavior:"smooth"}})}})();'
-                            QTimer.singleShot(0, lambda s=js: self._win.view.page().runJavaScript(s))
-                            return False
-                        QTimer.singleShot(0, lambda p=path: self._win.load_file(p))
-                        return False
-                    if url.scheme() in ('http', 'https'):
-                        QTimer.singleShot(0, lambda u=url: QDesktopServices.openUrl(u))
-                        return False
-                return True
-        self.view = QWebEngineView()
-        self.view.setPage(_Page(self, self.view))
-        self.view.setAcceptDrops(False)
-        self._drag_filter = DragFilter(self)
-        self.view.installEventFilter(self._drag_filter)
-        self._view_ready = True
-        idx = self.splitter.indexOf(self._view_placeholder)
-        self.splitter.insertWidget(idx, self.view)
-        self._view_placeholder.hide()
-        self._view_placeholder.deleteLater()
-        self._view_placeholder = None
-        self.search_bar.set_view(self.view)
-        #260526 Red 视图就绪后重新渲染：命令行文件 > 恢复文件 > 欢迎页
+        """懒加载 WebView 并显示初始内容（命令行文件 > 恢复文件 > 欢迎页）。"""
+        self._ensure_view()
         if self._initial_file:
             self.load_file(self._initial_file)
         elif self._restore_last:
@@ -2028,6 +1991,64 @@ class TypeRedWindow(QMainWindow):
 
     # ── 欢迎页 ────────────────────────────────────────────────────────────────
 
+    def _build_welcome_page(self):
+        """用 QTextBrowser 渲染欢迎页（原生 Qt，无需 WebView，即时显示）。"""
+        welcome_md = self._load_welcome_md()
+        if not welcome_md:
+            self._welcome_page.setPlainText(f'Welcome to {APP_NAME}')
+            return
+        body, toc = render_markdown(welcome_md)
+        css_content = _load_css()
+        toc_block = f'<nav id="toc">{toc}</nav>' if toc.strip() else ''
+        html = f"""<!DOCTYPE html>
+<html class="{self.theme}">
+<head><meta charset="utf-8"><title>{APP_NAME}</title>
+<style>{css_content}</style>
+</head>
+<body><div id="layout">{toc_block}<article id="content">{body}</article></div></body>
+</html>"""
+        self._welcome_page.setHtml(html)
+
+    # ── 懒加载 WebView ────────────────────────────────────────────────────────
+
+    def _ensure_view(self):
+        """按需创建 QWebEngineView，替换 QTextBrowser 欢迎页。"""
+        if self.view is not None:
+            return
+        from PySide6.QtWebEngineWidgets import QWebEngineView
+        from PySide6.QtWebEngineCore import QWebEnginePage
+        class _Page(QWebEnginePage):
+            def __init__(self, win, parent=None):
+                super().__init__(parent)
+                self._win = win
+            def acceptNavigationRequest(self, url, nav_type, _is_main):
+                if nav_type == QWebEnginePage.NavigationType.NavigationTypeLinkClicked:
+                    path = url.toLocalFile()
+                    if path:
+                        fragment = url.fragment()
+                        if fragment and os.path.normpath(path) == self._win.current_file:
+                            js = f'(function(){{var e=document.getElementById("{fragment}");if(e)e.scrollIntoView({{behavior:"smooth"}})}})();'
+                            QTimer.singleShot(0, lambda s=js: self._win.view.page().runJavaScript(s))
+                            return False
+                        QTimer.singleShot(0, lambda p=path: self._win.load_file(p))
+                        return False
+                    if url.scheme() in ('http', 'https'):
+                        QTimer.singleShot(0, lambda u=url: QDesktopServices.openUrl(u))
+                        return False
+                return True
+        self.view = QWebEngineView()
+        self.view.setPage(_Page(self, self.view))
+        self.view.setAcceptDrops(False)
+        self._drag_filter = DragFilter(self)
+        self.view.installEventFilter(self._drag_filter)
+        self._view_ready = True
+        idx = self.splitter.indexOf(self._welcome_page)
+        self.splitter.insertWidget(idx, self.view)
+        self._welcome_page.hide()
+        self._welcome_page.deleteLater()
+        self._welcome_page = None
+        self.search_bar.set_view(self.view)
+
     def _load_welcome_md(self) -> str:
         try:
             with open(os.path.join(BASE_DIR, 'frontend', 'welcome.md'), encoding='utf-8') as f:
@@ -2040,10 +2061,12 @@ class TypeRedWindow(QMainWindow):
         welcome_md = self._load_welcome_md()
         if not welcome_md:
             return
+        # 如果在 WebView 尚未就绪时被调用，直接返回（QTextBrowser 已显示欢迎页）
+        if self.view is None:
+            return
         body, toc = render_markdown(welcome_md)
-        if self.view:
-            self.view.setHtml(build_page(body, toc, self.theme, APP_NAME),
-                              QUrl(f'file:///{BASE_DIR}/'))
+        self.view.setHtml(build_page(body, toc, self.theme, APP_NAME),
+                          QUrl(f'file:///{BASE_DIR}/'))
 
     # ── 文件监听器辅助 ────────────────────────────────────────────────────────
 
@@ -2403,6 +2426,7 @@ class TypeRedWindow(QMainWindow):
         QTimer.singleShot(50, self._sync_preview_scroll)
 
     def _update_preview(self):
+        self._ensure_view()
         if self._edit_mode:
             text = self._cached_text or self.editor.toPlainText()
         else:
@@ -2544,6 +2568,7 @@ class TypeRedWindow(QMainWindow):
         if not self.current_file:
             self.statusBar().showMessage('请先打开一个文件')
             return
+        self._ensure_view()
         default = os.path.splitext(self.current_file)[0] + '.pdf'
         save_path, _ = QFileDialog.getSaveFileName(self, '导出 PDF', default, 'PDF 文件 (*.pdf)')
         if save_path and self.view:
@@ -2571,7 +2596,10 @@ class TypeRedWindow(QMainWindow):
         if self.current_file or self._edit_mode:
             self._update_preview()
         else:
-            self._show_welcome()
+            if self.view:
+                self._show_welcome()
+            elif self._welcome_page:
+                self._build_welcome_page()
 
     # ── 拖拽 ──────────────────────────────────────────────────────────────────
 
@@ -2607,10 +2635,13 @@ def main():
 
     initial_file = sys.argv[1] if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]) else ''
     win = TypeRedWindow(icon, initial_file)
-    #260609 Red v0.6.6 在 splash 阶段提前初始化 WebView（Chromium 子进程启动 + 内容加载），
-    #           窗口弹出时内容已就绪或接近就绪，消除「加载中…」等待时间。
-    win._init_view()
+    # 有文件参数时提前初始化 WebView 以便加载内容；无文件时即刻弹窗（QTextBrowser 欢迎页）
+    if initial_file:
+        win._init_view()
     win.show()
+    # 无文件时后台懒加载 WebView，用户感知不到
+    if not initial_file:
+        QTimer.singleShot(600, win._init_view)
 
     sys.exit(app.exec())
 

@@ -7,6 +7,22 @@
 
 ---
 
+## [0.7.9] - 2026-06-20
+
+> 启动优化：去掉 PyInstaller splash 和 QLabel「加载中…」，替换为 QTextBrowser 欢迎页
+
+#### 优化
+
+- **启动渲染**：去掉两段式加载（splash + QTimer 延迟 + QLabel「加载中…」），窗口立现 QTextBrowser 欢迎页，WebView 后台 600ms 懒加载就绪后无损替换。无文件启动完全免等待，有文件启动也不再有 splash 闪烁，渲染完成前内容可见
+
+#### 重构
+
+- **WebView 懒加载**：`_init_view` 拆出 `_ensure_view()`，只有实际需要 WebView 的操作（onboarding、预览、导出）才触发初始化；代码中的显式 `_init_view` 调用替换为一次 QTimer.singleShot 后台初始化，不再阻塞 `showEvent`
+- **主题切换适配**：QTextBrowser 实现 `set_theme` 方法，set_theme 不依赖 WebView 存在，欢迎页跟随主题色变更
+- **构建流水线**：`build.bat` 删除 splash 生成步骤和 `--splash` 参数，`TypeRed.spec` 由 PyInstaller 自动生成无 Splash 块
+
+---
+
 ## [0.7.8] - 2026-06-15
 
 ### 修复
