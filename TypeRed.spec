@@ -15,20 +15,10 @@ a = Analysis(
     optimize=0,
 )
 pyz = PYZ(a.pure)
-splash = Splash(
-    'splash.png',
-    binaries=a.binaries,
-    datas=a.datas,
-    text_pos=None,
-    text_size=12,
-    minify_script=True,
-    always_on_top=True,
-)
 
 exe = EXE(
     pyz,
     a.scripts,
-    splash,
     [],
     exclude_binaries=True,
     name='TypeRed',
@@ -49,7 +39,6 @@ coll = COLLECT(
     exe,
     a.binaries,
     a.datas,
-    splash.binaries,
     strip=False,
     upx=False,
     upx_exclude=[],

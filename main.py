@@ -27,6 +27,7 @@ import math
 import html
 import ctypes
 import tempfile
+import json
 from dataclasses import dataclass, field
 
 
@@ -54,7 +55,7 @@ from PySide6.QtGui import (
     QMouseEvent, QAction, QTextCursor, QTextDocument, QRegion, QDesktopServices, QMovie,
 )
 
-VERSION  = "0.7.9"
+VERSION  = "0.7.10"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 MAX_RECENT = 10
@@ -307,7 +308,6 @@ def render_chunked(text: str, initial_chunks: int = 5) -> tuple[str, str, str]:
     Returns:
         (initial_body_html, remaining_chunks_json, toc_html)
     """
-    import json
     body, toc = render_markdown(text)
     chunks = _chunk_rendered_html(body)
     if len(chunks) <= initial_chunks + 1:
@@ -317,10 +317,20 @@ def render_chunked(text: str, initial_chunks: int = 5) -> tuple[str, str, str]:
     return initial, remaining, toc
 
 
-def render_markdown(text: str) -> tuple[str, str]:
-    if not hasattr(render_markdown, '_md'):
-        render_markdown._md = _create_md_instance()
-    md = render_markdown._md
+_MD_INSTANCE: mistune.Markdown | None = None
+
+
+def _get_md_instance() -> mistune.Markdown:
+    """获取/创建全局复用的 mistune Markdown 实例。"""
+    global _MD_INSTANCE
+    if _MD_INSTANCE is None:
+        _MD_INSTANCE = _create_md_instance()
+    return _MD_INSTANCE
+
+
+def _render_to_body_toc(text: str) -> tuple[str, str]:
+    """共享渲染核心：Markdown → body HTML + TOC。"""
+    md = _get_md_instance()
     md.renderer.reset_toc()
     text = emoji.emojize(text, language='alias')
     text = re.sub(r"</?div[^>]*>", "", text)
@@ -328,6 +338,10 @@ def render_markdown(text: str) -> tuple[str, str]:
     body = _typograph(body)
     toc = build_toc(md.renderer.toc_entries)
     return body, toc
+
+
+def render_markdown(text: str) -> tuple[str, str]:
+    return _render_to_body_toc(text)
 
 
 def _create_md_instance():
@@ -343,30 +357,6 @@ def _create_md_instance():
     )
 
 
-class _RenderWorker(QThread):
-    """后台线程执行 Markdown 渲染，避免大文件阻塞 UI。"""
-    finished = Signal(str, str, str)  # body, toc, title
-
-    def __init__(self, text: str, title: str, parent=None):
-        super().__init__(parent)
-        self._text = text
-        self._title = title
-
-    def run(self):
-        try:
-            # 使用独立实例避免与主线程 render_markdown 竞争
-            md = _create_md_instance()
-            md.renderer.reset_toc()
-            text = emoji.emojize(self._text, language='alias')
-            text = re.sub(r"</?div[^>]*>", "", text)
-            body = md(text)
-            body = _typograph(body)
-            toc = build_toc(md.renderer.toc_entries)
-        except Exception as ex:
-            body, toc = f'<p style="color:red">渲染失败：{ex}</p>', ''
-        self.finished.emit(body, toc, self._title)
-
-
 class _ChunkedRenderWorker(QThread):
     """后台线程执行分块 Markdown 渲染（全量 → 切块 → 渐进加载）。"""
     finished = Signal(str, str, str)  # initial_body, remaining_json, toc
@@ -378,16 +368,7 @@ class _ChunkedRenderWorker(QThread):
 
     def run(self):
         try:
-            # 全量渲染获取正确 TOC 和 heading ID
-            md = _create_md_instance()
-            md.renderer.reset_toc()
-            text = emoji.emojize(self._text, language='alias')
-            text = re.sub(r"</?div[^>]*>", "", text)
-            full_body = md(text)
-            full_body = _typograph(full_body)
-            toc = build_toc(md.renderer.toc_entries)
-            # 切块
-            import json
+            full_body, toc = _render_to_body_toc(self._text)
             chunks = _chunk_rendered_html(full_body)
             initial = '\n'.join(chunks[:CHUNK_INITIAL])
             remaining = json.dumps(chunks[CHUNK_INITIAL:])
@@ -2004,6 +1985,7 @@ class TypeRedWindow(QMainWindow):
 <html class="{self.theme}">
 <head><meta charset="utf-8"><title>{APP_NAME}</title>
 <style>{css_content}</style>
+<style>{pygments_css(self.theme)}</style>
 </head>
 <body><div id="layout">{toc_block}<article id="content">{body}</article></div></body>
 </html>"""
@@ -2444,6 +2426,7 @@ class TypeRedWindow(QMainWindow):
             self._pending_scroll_ratio = self.editor.textCursor().position() / max(len(text), 1)
         else:
             self._pending_scroll_ratio = None
+        self._set_loading_theme()
         self._loading_overlay.move(self._loading_overlay.parent().width() - self._loading_overlay.width() - 20, 50)
         self._loading_overlay.show()
         self._loading_overlay.raise_()
@@ -2471,18 +2454,6 @@ class TypeRedWindow(QMainWindow):
                 self.statusBar().showMessage(f'渲染失败：{ex}')
                 return
             self._apply_render_result(body, toc, title)
-
-    def _start_async_render(self, text: str, title: str):
-        """在后台线程中渲染 Markdown（全量，兼容 0.7.6 旧路径）。"""
-        old = self._render_worker
-        if old is not None and old.isRunning():
-            old.finished.disconnect()
-            old.quit()
-            old.wait(200)
-        worker = _RenderWorker(text, title, parent=self)
-        worker.finished.connect(self._on_async_render_done)
-        self._render_worker = worker
-        worker.start()
 
     def _start_chunked_async_render(self, text: str, title: str):
         """后台线程分块渲染，避免大文件阻塞 UI。"""
@@ -2542,10 +2513,6 @@ class TypeRedWindow(QMainWindow):
         if self._pending_scroll_ratio is not None:
             QTimer.singleShot(120, self._sync_preview_scroll)
 
-    def _on_async_render_done(self, body: str, toc: str, title: str):
-        """后台全量渲染完成。"""
-        self._apply_render_result(body, toc, title)
-
     def _on_chunked_render_done(self, body: str, remaining: str, toc: str):
         """后台分块渲染完成，自动读取标题。"""
         title = os.path.basename(self.current_file) if self.current_file else APP_NAME
@@ -2590,6 +2557,7 @@ class TypeRedWindow(QMainWindow):
         self.search_bar.apply_theme(theme)
         self.editor.apply_theme(theme)
         self._apply_tab_theme(theme)
+        self._set_loading_theme()
         #260525 Red 猫猫边框跟随主题
         _, _, border, _, _ = THEME_TB[theme]
         self._cat_label.setStyleSheet('border-radius: 10px;')
@@ -2600,6 +2568,24 @@ class TypeRedWindow(QMainWindow):
                 self._show_welcome()
             elif self._welcome_page:
                 self._build_welcome_page()
+
+    def _set_loading_theme(self):
+        """Loading 覆盖层跟随主题。"""
+        if self.theme in ('dark', 'night'):
+            bg0, bg1, clr, bdr = 'rgba(20,20,30,0.88)', 'rgba(15,15,25,0.84)', '#8888aa', 'rgba(60,60,80,0.5)'
+        else:
+            bg0, bg1, clr, bdr = 'rgba(248,248,248,0.88)', 'rgba(238,238,238,0.84)', '#888', 'rgba(200,200,200,0.5)'
+        self._loading_overlay.setStyleSheet(f"""
+            QLabel {{
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 {bg0}, stop:1 {bg1});
+                color: {clr};
+                font-size: 11px;
+                border: 1px solid {bdr};
+                border-radius: 4px;
+                padding: 2px 8px;
+            }}
+        """)
 
     # ── 拖拽 ──────────────────────────────────────────────────────────────────
 

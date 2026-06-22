@@ -18,6 +18,29 @@
     });
   }
 
+  // ── TOC 当前标题高亮（IntersectionObserver） ──
+  (function() {
+    var tocLinks = toc ? toc.querySelectorAll('a[href^="#"]') : [];
+    if (!tocLinks.length) return;
+    var headings = [];
+    tocLinks.forEach(function(a) {
+      var id = a.getAttribute('href').replace(/.*#/, '');
+      var el = document.getElementById(id);
+      if (el) headings.push({el: el, link: a});
+    });
+    if (!headings.length) return;
+    var observer = new IntersectionObserver(function(entries) {
+      entries.forEach(function(entry) {
+        if (entry.isIntersecting) {
+          tocLinks.forEach(function(a) { a.classList.remove('active'); });
+          var h = headings.find(function(h) { return h.el === entry.target; });
+          if (h) h.link.classList.add('active');
+        }
+      });
+    }, {rootMargin: '-64px 0px -60% 0px'});
+    headings.forEach(function(h) { observer.observe(h.el); });
+  })();
+
   // ── TOC 拖拽调整宽度 ──
   (function() {
     var handle = document.getElementById('toc-resize');

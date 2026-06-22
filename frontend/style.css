@@ -164,9 +164,15 @@ html.cream #toc {
   white-space: nowrap;
 }
 
-#toc a:hover {
+#toc a:hover,
+#toc a.active {
   color: var(--link);
   background: var(--code-bg);
+}
+#toc a.active {
+  font-weight: 600;
+  border-left: 2px solid var(--link);
+  border-radius: 0 4px 4px 0;
 }
 
 /* ── 正文 ── */

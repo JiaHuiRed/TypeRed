@@ -7,6 +7,35 @@
 
 ---
 
+## [0.7.10] - 2026-06-22
+
+> 性能/死代码/UI 三维优化：复用 mistune 实例、删除废弃异步渲染路径、Loading 和欢迎页跟随主题、TOC 当前位置高亮
+
+#### 性能
+
+- **复用 mistune Markdown 实例**：`render_markdown` 用 `hasattr` 做属性缓存的做法（v0.7.5 已消灭同类反模式）替换为模块级 `_MD_INSTANCE` 变量，渲染核心提取为 `_render_to_body_toc` 供 `_ChunkedRenderWorker` 复用，两个 worker 不再各自创建独立 mistune 实例
+- **`import json` 提到模块级**：`render_chunked` 和 `_ChunkedRenderWorker.run` 中的局部导入改为模块级一次导入
+
+#### 重构
+
+- **删除废弃异步渲染路径**：`_start_async_render` / `_RenderWorker` / `_on_async_render_done` — v0.7.7 引入分块渲染后的全量异步遗留代码，从未被调用
+
+#### 移除
+
+- **清理 splash 残留**：`make_splash.py` / `splash.png` / `TypeRed.spec` 中废弃 Splash 块
+
+#### 美化
+
+- **欢迎页代码高亮**：`_build_welcome_page` 注入 `pygments_css`，欢迎页 Markdown 代码围栏获得语法高亮
+- **Loading 覆盖层跟随主题**：暗色/夜间主题下 Loading 标签使用深色渐变背景，不再固定浅色
+- **TOC 当前标题高亮**：新增 IntersectionObserver 监测，滚动时自动高亮当前阅读标题
+
+#### 修复
+
+- **`test_render.py`**：`test_long_text` 使用不存在的 `'oled'` 主题 → 改为 `'dark'`
+
+---
+
 ## [0.7.9] - 2026-06-20
 
 > 启动优化：去掉 PyInstaller splash 和 QLabel「加载中…」，替换为 QTextBrowser 欢迎页
