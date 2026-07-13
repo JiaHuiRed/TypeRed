@@ -7,6 +7,24 @@
 
 ---
 
+## [0.7.11] - 2026-07-13
+
+> 缓存键稳定性修复 + 渲染管道安全加固 + emoji 预处理性能优化
+
+#### 修复
+
+- **渲染缓存键不稳定**：用 `hash(text)` 做缓存 key 在不同 Python 进程间不一致，导致跨会话缓存失效。替换为 `_content_fingerprint()`（`hashlib.md5[:16]`），稳定跨进程，涉及 `main.py:360`、`main.py:2433`
+
+#### 安全
+
+- **chunked 页面 JSON 注入风险**：`_render_chunk_to_html` 将渲染结果直接 JSON 序列化后注入 `<script>`，含 `</script>` 的正文可截断 script 标签执行任意 JS。新增 `_json_safe_embed()` 转义 `</script>` 序列，涉及 `main.py:365`、`main.py:572`
+
+#### 优化
+
+- **emoji 短代码重复处理**：`emoji.emojize()` 原在 `_render_to_body_toc()` 每次渲染调用，改为在 `load_file()` 一次性预处理，消除每次重渲染的重复开销，涉及 `main.py:2130`
+
+---
+
 ## [0.7.10] - 2026-06-22
 
 > 性能/死代码/UI 三维优化：复用 mistune 实例、删除废弃异步渲染路径、Loading 和欢迎页跟随主题、TOC 当前位置高亮

@@ -28,6 +28,7 @@ import html
 import ctypes
 import tempfile
 import json
+import hashlib
 from dataclasses import dataclass, field
 
 
@@ -55,7 +56,7 @@ from PySide6.QtGui import (
     QMouseEvent, QAction, QTextCursor, QTextDocument, QRegion, QDesktopServices, QMovie,
 )
 
-VERSION  = "0.7.10"
+VERSION  = "0.7.11"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 MAX_RECENT = 10
@@ -332,7 +333,6 @@ def _render_to_body_toc(text: str) -> tuple[str, str]:
     """共享渲染核心：Markdown → body HTML + TOC。"""
     md = _get_md_instance()
     md.renderer.reset_toc()
-    text = emoji.emojize(text, language='alias')
     text = re.sub(r"</?div[^>]*>", "", text)
     body = md(text)
     body = _typograph(body)
@@ -355,6 +355,16 @@ def _create_md_instance():
     return mistune.Markdown(
         renderer=TypeRedRenderer(), inline=inline, plugins=plugins,
     )
+
+
+def _content_fingerprint(text: str) -> str:
+    """返回文本的短指纹，替代 hash() 以保证跨进程稳定。"""
+    return hashlib.md5(text.encode('utf-8')).hexdigest()[:16]
+
+
+def _json_safe_embed(s: str) -> str:
+    """将 JSON 字符串安全嵌入 HTML <script> 标签内。"""
+    return s.replace('</script>', '<\\/script>').replace('<!--', '<\\!--')
 
 
 class _ChunkedRenderWorker(QThread):
@@ -558,8 +568,8 @@ def build_chunked_page(initial_body: str, remaining_json: str, toc: str, theme: 
     css_content = _load_css()
     js_content = _load_js()
     toc_block = f'<nav id="toc">{toc}</nav><div id="toc-resize"></div>' if toc.strip() else ''
-    # 注入分块 JS（替换占位符）
-    loader = _CHUNKED_JS.replace('%CHUNKS_JSON%', remaining_json)
+    # 注入分块 JS（替换占位符，防止 </script> 提前闭合标签）
+    loader = _CHUNKED_JS.replace('%CHUNKS_JSON%', _json_safe_embed(remaining_json))
     return f"""<!DOCTYPE html>
 <html class="{theme}">
 <head>
@@ -2116,6 +2126,9 @@ class TypeRedWindow(QMainWindow):
                     text = f.read()
             td.is_xmind = False
 
+        # 在存储/渲染前一次性完成 emoji 短代码替换，避免每次渲染重复处理
+        text = emoji.emojize(text, language='alias')
+
         self._suspend_watcher()
         if path not in self._watcher.files() and not td.is_xmind:
             self._watcher.addPath(path)
@@ -2416,8 +2429,8 @@ class TypeRedWindow(QMainWindow):
         if not text and not self.current_file:
             return
         title = os.path.basename(self.current_file) if self.current_file else APP_NAME
-        # 用 len+hash 双重校验代替全文比较
-        key = (self.theme, title, len(text), hash(text))
+        # 用 len+指纹 双重校验代替全文比较（hash() 跨进程不稳定）
+        key = (self.theme, title, len(text), _content_fingerprint(text))
         if key == self._last_render_key:
             self._sync_preview_from_cursor()
             return
