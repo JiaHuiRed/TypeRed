@@ -1,5 +1,5 @@
 # author Red
-# TypeRed — Markdown Reader & Editor v0.7.12
+# TypeRed — Markdown Reader & Editor v0.8.0
 #//#260518 Red 0.3.0 编辑模式/实时预览/Markdown格式快捷键/上下标高亮渲染
 #//#260518 Red 0.3.1 欢迎页详细化/修复代码围栏嵌套渲染/README补全快捷键
 #//#260518 Red 0.3.2 pygments_css缓存/字数统计/编辑模式Ctrl+F指向编辑区
@@ -56,7 +56,7 @@ from PySide6.QtGui import (
     QMouseEvent, QAction, QTextCursor, QTextDocument, QRegion, QDesktopServices, QMovie,
 )
 
-VERSION  = "0.7.12"
+VERSION  = "0.8.0"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 

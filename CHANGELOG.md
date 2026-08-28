@@ -7,6 +7,38 @@
 
 ---
 
+## [0.8.0] - 2026-08-28
+
+> 五套主题可读性对比度全线达标 + 代码块复制按钮 + 窄宽自适应 + 搜索栏懒加载期崩溃修复
+
+#### 新增
+
+- **代码块头部条**：左侧显示语言标签，右侧「复制」按钮，点击复制原始代码并短暂反馈「已复制」。事件委托挂在 `#content` 上，兼容大文档的渐进分块加载；`navigator.clipboard` 不可用时退回 `execCommand`。头部背景与分隔线用 `--text` 混合而非 `--th-bg` —— 代码区背景由 Pygments 主题决定，与 `--th-bg` 会撞色，涉及 `main.py:207`、`frontend/style.css:292`、`frontend/script.js:120`
+- **窄宽自适应**：720px / 480px 两级断点收窄正文 padding（48px → 24px → 16px）与 TOC 宽度（220px → 168px → 140px）。编辑模式下预览区常只有 400-500px，原先双侧 96px 留白吃掉两成宽度，涉及 `frontend/style.css:493`
+- **可访问性基础**：`:focus-visible` 覆盖正文/TOC 链接、任务列表复选框、复制按钮；QSS 补 `QPushButton:focus`（自定义 border 原会顶掉 Qt 默认焦点框）。新增 `prefers-reduced-motion` 兜底，CSS 过渡/动画降级、JS 锚点滚动退回 `auto`
+
+#### 修复
+
+- **搜索栏在 WebView 懒加载期崩溃**：`SearchBar(self, self)` 第二参签名是 `view` 却传了窗口自己，`_view` 指向窗口导致 `findText` 分支抛 `AttributeError`。无文件启动后 600ms 内按 Ctrl+E / Ctrl+F 必崩；改由 `_ensure_view()` 的 `set_view()` 注入，涉及 `main.py:1502`
+- **状态栏统计陈旧**：`_update_status_bar` 只读 `self._current_text`，而它仅在 load/save/切标签时更新 —— 编辑时行数/词数/字符数卡在上次保存值，新建文档一直停在欢迎语。编辑模式改读 `editor.toPlainText()`
+- **主题圆点看不出选中**：选中环原用白色，浅色三套主题下对比仅 1.08/1.19/1.31，等于不可见；改按主题取对比色（`THEME_RING`，最低 6.42）。原本用来补救的 `box-shadow` 那行 QSS 不支持，从未生效，一并删除
+- **交通灯按下无反馈**：`pressed` 用 `opacity`，QSS 同样不支持；改为实色深浅并补 hover 态
+- **「编辑」按钮激活态在深色主题下发暗**：文字色硬编码 `#3a5ad4`，叠在深色标题栏上只有 2.47/2.72；改按主题取（`THEME_EDIT_ACTIVE`，最低 5.57）。顺带修编辑模式下切主题会被 `apply_theme` 的普通样式顶掉激活态
+- **暗色/夜间正文次要文字偏灰**：`--text-muted` 为 4.18/3.45（侧栏底上 4.37/3.29），而 TOC 全部链接、引用块、脚注、h5/h6 都吃这个变量；提到 6.16/5.73
+- **标题栏按钮边框看不出是按钮**：五套主题 1.79-2.83，全部低于 WCAG 1.4.11 的 3:1；提到 3.19-3.86
+- **行号灰得过头**：2.04-2.9，比主流编辑器灰不少；提到 3.10-3.74
+- **宽表格撑破正文布局**：根因是 `#content` 作为 flex item 的 `min-width:auto` 被内容撑开，`table` 自身的 `overflow-x` 因此形同虚设。补 `min-width:0` 后表格改为内部滚动（470px 视口实测整页不再横向滚动）
+- **TOC 长标题截断后无从得知全文**：`text-overflow:ellipsis` 之外补 `title` 属性（剥内联标签），涉及 `main.py:245`
+- **图片放大遮罩关闭按钮**：由 `span` 改 `button`（键盘可达），加圆形半透明衬底，避免白色叉号落在浅色图片上不可见
+- **资源读盘缓存失败后反复重试**：`_CSS_CACHE`/`_JS_CACHE` 原先判空字符串，读盘失败即每次 `build_page` 都重试磁盘；改 `None` 哨兵
+- **后台渲染异常消息未转义**：worker 的异常文本直接拼进 HTML，改 `html.escape`
+
+#### 重构
+
+- 删死代码：`_smart_split_markdown`（23 行无调用）、两处恒假 `isinstance(toc, list)`、一处恒真 `hasattr(self, '_autosave_mtime')`
+
+---
+
 ## [0.7.12] - 2026-08-28
 
 > 编辑器行号区压字修复 + 渲染线程安全 + 外部修改提示可靠性 + 死代码清理
