@@ -7,6 +7,28 @@
 
 ---
 
+## [0.7.12] - 2026-08-28
+
+> 编辑器行号区压字修复 + 渲染线程安全 + 外部修改提示可靠性 + 死代码清理
+
+#### 修复
+
+- **行号区压住正文行首**：`blockSignals(True)` 包裹 `setPlainText` 会连 `blockCountChanged` 一起屏蔽，`viewportMargins` 停在旧行数算出的宽度，而行号区 geometry 在 `resizeEvent` 里按实时行数计算 —— 宽出的部分盖住行首两三个字符（如 `**`），直到滚动触发 `updateRequest` 才恢复。新增 `Editor.set_text()` 统一封装（blockSignals + setPlainText + `refresh_line_numbers()`），margins 与 geometry 始终同源，4 处调用点（切 tab / 打开文件 / 新建 / 进编辑模式）全部改走它，涉及 `main.py:690`
+- **后台分块渲染的 mistune 实例竞态**：`_ChunkedRenderWorker` 与主线程共用全局 `_MD_INSTANCE`，renderer 内部状态在并发下相互污染。worker 改用 `own_md=True` 走 `_create_md_instance()` 建独立实例
+- **紧接自动保存的外部修改被静默跳过**：`_autosave` 后记录文件 mtime，`_on_file_changed` 基于 mtime 二次判断，不再把外部真实改动当成自己写盘的回声
+
+#### 优化
+
+- **Loading 覆盖层位置**：Y 坐标 50 → 44，减少对标题栏/搜索栏的遮挡
+- **超大页面临时文件堆积**：`_set_page_html` 走临时文件前先 `_cleanup_typered_tmp()`，避免 `typered_preview.html` 残留累积
+
+#### 重构
+
+- **XMind 死代码清理**：删除 `_xmind_to_markdown` 末尾不可达的 `return ''`；删除 `_xmind_topic` 未使用的 `sheet_title` 参数并修正调用方
+- **头部版本注释同步**：`main.py:2` 长期停在 v0.6.5，与 `VERSION` 对齐
+
+---
+
 ## [0.7.11] - 2026-07-13
 
 > 缓存键稳定性修复 + 渲染管道安全加固 + emoji 预处理性能优化
