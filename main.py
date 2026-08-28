@@ -686,6 +686,26 @@ class Editor(QPlainTextEdit):
     def _update_line_number_width(self, _):
         self.setViewportMargins(self._line_number_width(), 0, 0, 0)
 
+    def refresh_line_numbers(self):
+        """同步 viewportMargins 与行号区 geometry，两者用同一宽度。"""
+        w = self._line_number_width()
+        self.setViewportMargins(w, 0, 0, 0)
+        cr = self.contentsRect()
+        self._line_num_area.setGeometry(QRect(cr.left(), cr.top(), w, cr.height()))
+
+    def set_text(self, text: str):
+        """整篇替换正文而不触发 on_change，并立刻校正行号宽度。
+
+        #260828 Red blockSignals 会连 blockCountChanged 一起屏蔽，viewportMargins
+        因此停在旧行数算出的宽度（空文档=1 位数），而 _line_num_area 的 geometry
+        在 resizeEvent 里按实时行数算（几百行=3 位数）。行号区比左边距宽，就会
+        压住正文左侧两三个字符（如行首的 **），直到滚动触发 updateRequest 才恢复。
+        """
+        self.blockSignals(True)
+        self.setPlainText(text)
+        self.blockSignals(False)
+        self.refresh_line_numbers()
+
     def _update_line_number_area(self, rect, dy):
         if dy:
             self._line_num_area.scroll(0, dy)
@@ -1728,9 +1748,7 @@ class TypeRedWindow(QMainWindow):
         self._last_render_key = td.render_key
 
         if self._edit_mode:
-            self.editor.blockSignals(True)
-            self.editor.setPlainText(td.text)
-            self.editor.blockSignals(False)
+            self.editor.set_text(td.text)
 
         self._update_preview()
         self._update_title()
@@ -2170,9 +2188,7 @@ class TypeRedWindow(QMainWindow):
         self._nav_idx      = td.nav_idx
 
         if self._edit_mode:
-            self.editor.blockSignals(True)
-            self.editor.setPlainText(text)
-            self.editor.blockSignals(False)
+            self.editor.set_text(text)
 
         self._update_preview()
         self._update_title()
@@ -2267,9 +2283,7 @@ class TypeRedWindow(QMainWindow):
         self._is_xmind     = False
 
         self._edit_mode = True
-        self.editor.blockSignals(True)
-        self.editor.setPlainText('')
-        self.editor.blockSignals(False)
+        self.editor.set_text('')
         self.editor.setVisible(True)
         self.splitter.setSizes([self.width() // 2, self.width() // 2])
         self.editor.setFocus()
@@ -2343,9 +2357,7 @@ class TypeRedWindow(QMainWindow):
         self.search_bar.hide_bar()
         if not self._edit_mode:
             self._edit_mode = True
-            self.editor.blockSignals(True)
-            self.editor.setPlainText(self._current_text)  # 无文件时为空白
-            self.editor.blockSignals(False)
+            self.editor.set_text(self._current_text)  # 无文件时为空白
             self.editor.setVisible(True)
             w = self.width()
             self.splitter.setSizes([w // 2, w // 2])
