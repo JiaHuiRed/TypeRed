@@ -250,29 +250,6 @@ def _typograph(text: str) -> str:
 # ── 块级拆分与渐进渲染 ─────────────────────────────────────────────────────────
 #//#260615 Red 0.7.7 大文档分块渐进加载
 
-def _smart_split_markdown(text: str) -> list[str]:
-    """在空白行处拆分 Markdown 为逻辑块，感知代码围栏。"""
-    lines = text.split('\n')
-    blocks = []
-    current = []
-    in_code = False
-    for line in lines:
-        s = line.strip()
-        if s.startswith('```') or s.startswith('~~~'):
-            in_code = not in_code
-            current.append(line)
-            continue
-        if not s and not in_code:
-            if current:
-                blocks.append('\n'.join(current))
-                current = []
-            continue
-        current.append(line)
-    if current:
-        blocks.append('\n'.join(current))
-    return blocks
-
-
 def _chunk_rendered_html(body: str, chunk_size: int = 30) -> list[str]:
     """将渲染后的 HTML 按顶层块级元素切分成块，用于渐进加载。
 
@@ -401,7 +378,10 @@ class _ChunkedRenderWorker(QThread):
             initial = '\n'.join(chunks[:CHUNK_INITIAL])
             remaining = json.dumps(chunks[CHUNK_INITIAL:])
         except Exception as ex:
-            initial, remaining, toc = f'<p style="color:red">渲染失败：{ex}</p>', '[]', ''
+            #260828 Red 异常文本可能含 < > 等字符，转义后再插进页面，避免破页
+            initial, remaining, toc = (
+                f'<p style="color:red">渲染失败：{html.escape(str(ex))}</p>', '[]', ''
+            )
         self.finished.emit(initial, remaining, toc)
 
 
@@ -478,13 +458,14 @@ def _xmind_xml_topic(topic, lines: list, level: int, ns: dict):
         _xmind_xml_topic(child, lines, level + 1, ns)
 
 
-# 资源文件启动时一次性读入内存
-_CSS_CACHE: str = ''
-_JS_CACHE: str = ''
+#260828 Red 缓存用 None 做「尚未加载」哨兵：早先判 `not _CSS_CACHE`，读盘失败
+# 存 '' 后每次 build_page 都会再试一遍磁盘，文件真丢时变成每帧 IO。
+_CSS_CACHE: str | None = None
+_JS_CACHE: str | None = None
 
 def _load_css() -> str:
     global _CSS_CACHE
-    if not _CSS_CACHE:
+    if _CSS_CACHE is None:
         try:
             with open(os.path.join(BASE_DIR, 'frontend', 'style.css'), encoding='utf-8') as f:
                 _CSS_CACHE = f.read()
@@ -494,7 +475,7 @@ def _load_css() -> str:
 
 def _load_js() -> str:
     global _JS_CACHE
-    if not _JS_CACHE:
+    if _JS_CACHE is None:
         try:
             with open(os.path.join(BASE_DIR, 'frontend', 'script.js'), encoding='utf-8') as f:
                 _JS_CACHE = f.read()
@@ -1518,7 +1499,11 @@ class TypeRedWindow(QMainWindow):
         self.splitter.addWidget(self.editor)
         self.splitter.addWidget(self._welcome_page)
 
-        self.search_bar = SearchBar(self, self)
+        #260828 Red 第二参是 view，早先误传了 win 自己：WebView 懒加载完成前
+        # _view 指向窗口，搜索栏任何 findText 分支都会 AttributeError 崩掉
+        # （无文件启动后 600ms 内按 Ctrl+E / Ctrl+F 即可复现）。留空，等
+        # _ensure_view() 里 set_view() 注入真正的 view。
+        self.search_bar = SearchBar(self)
         self.search_bar.apply_theme(self.theme)
 
         self.statusBar().setSizeGripEnabled(False)
@@ -2342,7 +2327,7 @@ class TypeRedWindow(QMainWindow):
             current_mtime = os.path.getmtime(path)
         except OSError:
             return
-        if hasattr(self, '_autosave_mtime') and current_mtime <= self._autosave_mtime:
+        if current_mtime <= self._autosave_mtime:
             if path not in self._watcher.files():
                 self._watcher.addPath(path)
             return
@@ -2424,7 +2409,12 @@ class TypeRedWindow(QMainWindow):
         self._status_timer.start()
 
     def _update_status_bar(self):
-        if not self.current_file and not self._current_text:
+        #260828 Red 编辑中 _current_text 只在 load/save/切标签时更新，实时文本在
+        # 编辑器里。原先一律读 _current_text，导致打字时行数/词数/字符数卡在上次
+        # 保存的值（新建文档更是一直停在欢迎语）。这里直接问编辑器要当前内容——
+        # 本方法有 200ms 去抖，不走 _cached_text 是为了避免切标签后残留旧文本。
+        text = self.editor.toPlainText() if self._edit_mode else self._current_text
+        if not self.current_file and not text:
             self._status_label.setText(
                 f'{APP_NAME} v{VERSION}  |  拖入 .md 文件或点击「打开」'
             )
@@ -2432,9 +2422,9 @@ class TypeRedWindow(QMainWindow):
         path = self.current_file
         fmt = 'XMind' if self._is_xmind else 'Markdown'
         size_kb = max(1, os.path.getsize(path) // 1024) if path and os.path.isfile(path) else 0
-        lines = self._current_text.count('\n') + 1
-        chars = len(self._current_text)
-        words = len(self._current_text.split()) if self._current_text.strip() else 0
+        lines = text.count('\n') + 1
+        chars = len(text)
+        words = len(text.split()) if text.strip() else 0
         self._status_label.setText(
             f'{os.path.basename(path) if path else "untitled.md"}'
             f'  |  {fmt}  |  {lines} 行  |  {size_kb} KB'
@@ -2527,8 +2517,6 @@ class TypeRedWindow(QMainWindow):
     def _apply_render_result(self, body, toc, title):
         """应用全量渲染结果到 WebView（0.7.6 旧路径）。"""
         self._loading_overlay.hide()
-        if isinstance(toc, list):
-            toc = "".join(toc)
         if not self.view:
             return
         page_html = build_page(body, toc, self.theme, title, is_xmind=self._is_xmind)
@@ -2537,8 +2525,6 @@ class TypeRedWindow(QMainWindow):
     def _apply_chunked_result(self, body, remaining_json, toc, title):
         """应用分块渲染结果到 WebView。"""
         self._loading_overlay.hide()
-        if isinstance(toc, list):
-            toc = "".join(toc)
         if not self.view:
             return
         page_html = build_chunked_page(body, remaining_json, toc, self.theme, title)
