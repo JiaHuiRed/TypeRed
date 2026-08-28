@@ -59,6 +59,17 @@ from PySide6.QtGui import (
 VERSION  = "0.7.11"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+
+
+def _cleanup_typered_tmp(path: str) -> None:
+    """清理上一次超大页面写入的临时文件，避免堆积。"""
+    try:
+        if os.path.isfile(path):
+            os.remove(path)
+    except OSError:
+        pass
+
+_TMP_PREVIEW = os.path.join(tempfile.gettempdir(), 'typered_preview.html')
 MAX_RECENT = 10
 SUPPORTED_EXTS = ('.md', '.markdown', '.mdown', '.txt', '.xmind')
 # 渐进渲染阈值：>50KB 启用分块，>256KB 异步渲染
@@ -69,6 +80,7 @@ CHUNK_INITIAL = 5  # 首屏渲染块数
 
 THEMES      = ['light', 'eye-care', 'cream', 'dark', 'night']
 THEME_NAMES = ['默认',  '护眼',    '米黄',  '暗色', '夜间']
+
 
 # (bg, fg, divider_border, btn_border, btn_fg)
 THEME_TB: dict[str, tuple[str, str, str, str, str]] = {
@@ -329,9 +341,15 @@ def _get_md_instance() -> mistune.Markdown:
     return _MD_INSTANCE
 
 
-def _render_to_body_toc(text: str) -> tuple[str, str]:
-    """共享渲染核心：Markdown → body HTML + TOC。"""
-    md = _get_md_instance()
+def _render_to_body_toc(text: str, own_md: bool = False) -> tuple[str, str]:
+    """共享渲染核心：Markdown → body HTML + TOC。
+    
+    后台线程渲染时传入 own_md=True，使用独立 mistune 实例避免线程竞态。
+    """
+    if own_md:
+        md = _create_md_instance()
+    else:
+        md = _get_md_instance()
     md.renderer.reset_toc()
     text = re.sub(r"</?div[^>]*>", "", text)
     body = md(text)
@@ -378,7 +396,7 @@ class _ChunkedRenderWorker(QThread):
 
     def run(self):
         try:
-            full_body, toc = _render_to_body_toc(self._text)
+            full_body, toc = _render_to_body_toc(self._text, own_md=True)
             chunks = _chunk_rendered_html(full_body)
             initial = '\n'.join(chunks[:CHUNK_INITIAL])
             remaining = json.dumps(chunks[CHUNK_INITIAL:])
@@ -1419,6 +1437,7 @@ class TypeRedWindow(QMainWindow):
         self._last_render_key = None
         self._pending_scroll_ratio = None
         self._skip_next_watch = False
+        self._autosave_mtime  = 0.0
         self._is_xmind        = False
         self._render_worker   = None
         self._chunked_worker  = None
@@ -2278,6 +2297,10 @@ class TypeRedWindow(QMainWindow):
             return
         self._resume_watcher()
         self._skip_next_watch = True
+        try:
+            self._autosave_mtime = os.path.getmtime(self.current_file)
+        except OSError:
+            self._autosave_mtime = 0.0
         self._current_text = text
         self._modified = False
         td = self._tab()
@@ -2297,6 +2320,15 @@ class TypeRedWindow(QMainWindow):
         # 跳过 autosave 自身触发的变更
         if self._skip_next_watch:
             self._skip_next_watch = False
+            if path not in self._watcher.files():
+                self._watcher.addPath(path)
+            return
+        # 防止 autosave 后外部修改被跳过：基于修改时间判断
+        try:
+            current_mtime = os.path.getmtime(path)
+        except OSError:
+            return
+        if hasattr(self, '_autosave_mtime') and current_mtime <= self._autosave_mtime:
             if path not in self._watcher.files():
                 self._watcher.addPath(path)
             return
@@ -2440,7 +2472,7 @@ class TypeRedWindow(QMainWindow):
         else:
             self._pending_scroll_ratio = None
         self._set_loading_theme()
-        self._loading_overlay.move(self._loading_overlay.parent().width() - self._loading_overlay.width() - 20, 50)
+        self._loading_overlay.move(self._loading_overlay.parent().width() - self._loading_overlay.width() - 20, 44)
         self._loading_overlay.show()
         self._loading_overlay.raise_()
         self._loading_overlay.repaint()
@@ -2510,7 +2542,8 @@ class TypeRedWindow(QMainWindow):
                 else:
                     base_tag = f'<base href="file:///{BASE_DIR}/">'
                 page_html = page_html.replace('<head>', f'<head>{base_tag}', 1)
-                tmp = os.path.join(tempfile.gettempdir(), 'typered_preview.html')
+                tmp = _TMP_PREVIEW
+                _cleanup_typered_tmp(tmp)
                 with open(tmp, 'w', encoding='utf-8') as f:
                     f.write(page_html)
                 self.view.load(QUrl.fromLocalFile(tmp))
