@@ -1,5 +1,5 @@
 # author Red
-# TypeRed — Markdown Reader & Editor v0.6.5
+# TypeRed — Markdown Reader & Editor v0.7.11
 #//#260518 Red 0.3.0 编辑模式/实时预览/Markdown格式快捷键/上下标高亮渲染
 #//#260518 Red 0.3.1 欢迎页详细化/修复代码围栏嵌套渲染/README补全快捷键
 #//#260518 Red 0.3.2 pygments_css缓存/字数统计/编辑模式Ctrl+F指向编辑区
@@ -413,16 +413,16 @@ def _xmind_to_markdown(path: str) -> str:
                 return _xmind_8_to_md(tree)
     except Exception:
         return ''
-    return ''
+
 
 def _xmind_zen_to_md(data: list) -> str:
     lines = [f'# {APP_NAME} — XMind 思维导图\n']
     for sheet in data:
         root = sheet.get('rootTopic', {})
-        _xmind_topic(lines, root, 2, sheet.get('title'))
+        _xmind_topic(lines, root, 2)
     return '\n'.join(lines)
 
-def _xmind_topic(lines: list, topic: dict, level: int, sheet_title: str = ''):
+def _xmind_topic(lines: list, topic: dict, level: int):
     title = topic.get('title', '').strip()
     note = topic.get('notes', {}).get('plain', {}).get('content', '').strip()
     if title:
