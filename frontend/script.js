@@ -1,9 +1,14 @@
 /* author Red */
-/* TypeRed — Markdown Reader & Editor v0.7.7 — 事件委托版 */
+/* TypeRed — Markdown Reader & Editor v0.8.0 — 事件委托版 */
 /* 使用事件委托支持动态加载的内容块 */
 
 (function() {
   'use strict';
+
+  // #260828 Red 0.8.0 尊重系统「减少动态效果」
+  var reduceMotion = window.matchMedia &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var scrollOpts = reduceMotion ? {behavior: 'auto'} : {behavior: 'smooth'};
 
   // ── TOC 锚点跳转 ──
   var toc = document.getElementById('toc');
@@ -14,7 +19,7 @@
       e.preventDefault();
       var id = a.getAttribute('href').replace(/.*#/, '');
       var el = document.getElementById(id);
-      if (el) { el.scrollIntoView({behavior:'smooth'}); }
+      if (el) { el.scrollIntoView(scrollOpts); }
     });
   }
 
@@ -80,7 +85,8 @@
   (function() {
     var overlay = document.createElement('div');
     overlay.id = 'img-overlay';
-    overlay.innerHTML = '<span class="img-close">&times;</span><img src="" alt="">';
+    overlay.innerHTML = '<button class="img-close" type="button" aria-label="关闭">&times;</button>' +
+                        '<img src="" alt="">';
     overlay.addEventListener('click', function(e) {
       if (e.target === overlay || e.target.classList.contains('img-close')) {
         overlay.classList.remove('active');
@@ -107,5 +113,43 @@
       });
     }
   })();
+  // ── #260828 Red 0.8.0 代码块复制按钮（事件委托，兼容渐进加载） ──
+  if (content) {
+    content.addEventListener('click', function(e) {
+      var btn = e.target.closest('.code-copy');
+      if (!btn) return;
+      e.stopPropagation();
+      var box = btn.closest('.codehilite');
+      var code = box && box.querySelector('pre code');
+      if (!code) return;
+      var text = code.textContent;
+      var done = function() {
+        btn.textContent = '已复制';
+        btn.classList.add('copied');
+        setTimeout(function() {
+          btn.textContent = '复制';
+          btn.classList.remove('copied');
+        }, 1600);
+      };
+      var fallback = function() {
+        // QWebEngineView 未授予 clipboard 权限时退回 execCommand
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); done(); }
+        catch (err) { btn.textContent = '失败'; setTimeout(function() { btn.textContent = '复制'; }, 1600); }
+        document.body.removeChild(ta);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, fallback);
+      } else {
+        fallback();
+      }
+    });
+  }
 
 })();

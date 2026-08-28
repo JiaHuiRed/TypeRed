@@ -24,7 +24,7 @@ html.dark {
   --bg:          #1a1b26;
   --bg-sidebar:  #16171f;
   --text:        #c0caf5;
-  --text-muted:  #787c99;
+  --text-muted:  #949ab8;
   --link:        #7aa2f7;
   --border:      #2a2b3d;
   --code-bg:     #1e1f2e;
@@ -72,7 +72,7 @@ html.night {
   --bg:          #0a0a0a;
   --bg-sidebar:  #111111;
   --text:        #cccccc;
-  --text-muted:  #666666;
+  --text-muted:  #8a8a8a;
   --link:        #6aabff;
   --border:      #222222;
   --code-bg:     #141414;
@@ -178,6 +178,9 @@ html.cream #toc {
 /* ── 正文 ── */
 #content {
   flex: 1;
+  /* #260828 Red 0.8.0 flex item 默认 min-width:auto 会被宽表格撑开，
+     导致整页横向滚动、table 自身的 overflow-x 形同虚设 */
+  min-width: 0;
   max-width: 860px;
   margin: 0 auto;
   padding: 40px 48px 80px;
@@ -289,9 +292,56 @@ html.cream #toc {
   font-size: 1em;
 }
 
+/* ── #260828 Red 0.8.0 代码块头部：语言标签 + 复制按钮 ── */
+/* 背景/分隔线用 --text 混合而非 --th-bg：代码区背景由 Pygments 主题决定，
+   与 --th-bg 容易撞色（夜间下两者几乎同亮度），混 --text 才能保证有分界 */
+#content .code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 10px 4px 14px;
+  background: color-mix(in srgb, var(--text) 12%, var(--bg));
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 30%, var(--bg));
+}
+#content .code-lang {
+  font-family: 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
+  font-size: 11px;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  text-transform: lowercase;
+  user-select: none;
+}
+#content .code-copy {
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 9px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--text) 45%, var(--bg));
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+#content .code-copy:hover {
+  color: var(--link);
+  border-color: var(--link);
+  background: color-mix(in srgb, var(--link) 12%, transparent);
+}
+#content .code-copy.copied {
+  color: var(--link);
+  border-color: var(--link);
+}
+
 /* ── 表格 ── */
+/* #260828 Red 0.8.0 宽表格改内部滚动，避免撑破正文布局产生整页横向滚动 */
 #content table {
+  display: block;
   width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
   border-collapse: collapse;
   margin: 1em 0;
   font-size: 0.92em;
@@ -462,13 +512,58 @@ html.cream    #content mark { background: #f5d080; color: #2c1f0a; }
   position: absolute;
   top: 20px;
   right: 30px;
-  font-size: 36px;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
   color: #fff;
   cursor: pointer;
-  opacity: 0.6;
-  transition: opacity 0.2s;
+  opacity: 0.75;
+  transition: opacity 0.2s, background 0.2s;
   line-height: 1;
+  /* #260828 Red 0.8.0 加半透明衬底，避免落在浅色图片上看不见 */
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: 50%;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
 }
 #img-overlay .img-close:hover {
   opacity: 1;
+  background: rgba(0, 0, 0, 0.65);
+}
+
+/* ── #260828 Red 0.8.0 窄宽收窄正文留白 ── */
+/* 编辑模式下预览区常只有 400-500px，48px 双侧留白会吃掉两成宽度 */
+@media (max-width: 720px) {
+  #content { padding: 28px 24px 60px; }
+  #layout:not(:has(#toc)) #content { padding-left: 24px; }
+  /* 窄宽下侧栏也收一收，别吃掉近半宽度 */
+  #toc { width: 168px; min-width: 100px; padding: 20px 12px 20px 14px; }
+}
+@media (max-width: 480px) {
+  #content { padding: 20px 16px 48px; }
+  #layout:not(:has(#toc)) #content { padding-left: 16px; }
+  #toc { width: 140px; min-width: 90px; }
+}
+
+/* ── #260828 Red 0.8.0 键盘焦点可见 ── */
+#content a:focus-visible,
+#toc a:focus-visible,
+#content input[type="checkbox"]:focus-visible,
+.code-copy:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* ── #260828 Red 0.8.0 尊重系统「减少动态效果」 ── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
 }

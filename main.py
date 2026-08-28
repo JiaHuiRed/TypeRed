@@ -83,12 +83,31 @@ THEME_NAMES = ['默认',  '护眼',    '米黄',  '暗色', '夜间']
 
 
 # (bg, fg, divider_border, btn_border, btn_fg)
+# #260828 Red 0.8.0 btn_border 全部提到 >=3:1（WCAG 1.4.11 非文本对比），原值 1.79-2.83 看不出是按钮
 THEME_TB: dict[str, tuple[str, str, str, str, str]] = {
-    'light':    ('#f5f5f5', '#1a1a1a', '#d5d5d5', '#999999', '#1a1a1a'),
-    'eye-care': ('#d8edd8', '#1a2e1a', '#b8d8b8', '#88bb88', '#1a2e1a'),
-    'cream':    ('#e8dcc0', '#2c1f0a', '#ccb888', '#aa8844', '#2c1f0a'),
-    'dark':     ('#14151e', '#c0caf5', '#2a2b3d', '#5a5c7e', '#dde0ff'),
-    'night':    ('#0d0d0d', '#d0d0d0', '#222222', '#505050', '#f0f0f0'),
+    'light':    ('#f5f5f5', '#1a1a1a', '#d5d5d5', '#808080', '#1a1a1a'),
+    'eye-care': ('#d8edd8', '#1a2e1a', '#b8d8b8', '#568c56', '#1a2e1a'),
+    'cream':    ('#e8dcc0', '#2c1f0a', '#ccb888', '#8f6a2a', '#2c1f0a'),
+    'dark':     ('#14151e', '#c0caf5', '#2a2b3d', '#6e7196', '#dde0ff'),
+    'night':    ('#0d0d0d', '#d0d0d0', '#222222', '#626262', '#f0f0f0'),
+}
+
+# #260828 Red 0.8.0 主题圆点选中环：浅色主题原用白环（对比 1.08-1.31，等于不可见），改按主题取对比色
+THEME_RING: dict[str, str] = {
+    'light':    '#595959',
+    'eye-care': '#22441f',
+    'cream':    '#4a3210',
+    'dark':     'rgba(255,255,255,0.85)',
+    'night':    'rgba(255,255,255,0.8)',
+}
+
+# #260828 Red 0.8.0 编辑按钮激活态文字色：原硬编码 #3a5ad4，暗色/夜间只有 2.47/2.72
+THEME_EDIT_ACTIVE: dict[str, str] = {
+    'light':    '#2d4bc4',
+    'eye-care': '#26479f',
+    'cream':    '#24399f',
+    'dark':     '#9db4ff',
+    'night':    '#9db4ff',
 }
 
 THEME_DOT: dict[str, str] = {
@@ -117,12 +136,13 @@ THEME_EDITOR: dict[str, tuple[str, str]] = {
 }
 
 # 行号区 bg / fg
+# #260828 Red 0.8.0 fg 全部提到 >=3:1（原 2.04-2.9，比 VS Code 行号灰得多）
 THEME_LINENO: dict[str, tuple[str, str]] = {
-    'light':    ('#f0f0f2', '#aaaaaa'),
-    'eye-care': ('#e4ede4', '#7a9a7a'),
-    'cream':    ('#ede4c8', '#a08858'),
-    'dark':     ('#13141d', '#5a5e7a'),
-    'night':    ('#080808', '#484848'),
+    'light':    ('#f0f0f2', '#88888d'),
+    'eye-care': ('#e4ede4', '#688868'),
+    'cream':    ('#ede4c8', '#8a7040'),
+    'dark':     ('#13141d', '#6b6f8e'),
+    'night':    ('#080808', '#606060'),
 }
 
 # ── Tab 数据 ──────────────────────────────────────────────────────────────────
@@ -186,16 +206,26 @@ class TypeRedRenderer(mistune.HTMLRenderer):
         return f'<h{level} id="{slug}">{text}<a class="headerlink" href="#{slug}">\u00b6</a></h{level}>'
 
     def block_code(self, text: str, info: str | None = None) -> str:
+        # #260828 Red 0.8.0 代码块加语言标签与复制按钮（复制原文由 JS 取 code.textContent）
         lang = info.strip().split()[0] if info else ''
+        safe_lang = html.escape(lang, quote=True)
+        head = (
+            f'<div class="code-head"><span class="code-lang">{safe_lang}</span>'
+            f'<button class="code-copy" type="button" aria-label="复制代码">复制</button></div>'
+        )
         if lang:
             try:
                 lexer = get_lexer_by_name(lang)
                 highlighted = highlight(text, lexer, HtmlFormatter(nowrap=True))
-                return f'<div class="codehilite"><pre><code class="language-{lang}">{highlighted}</code></pre></div>'
+                return (f'<div class="codehilite">{head}'
+                        f'<pre><code class="language-{safe_lang}">{highlighted}</code></pre></div>')
             except Exception:
                 pass
-        text = html.escape(text)
-        return f'<div class="codehilite"><pre><code>{text}</code></pre></div>'
+        return (f'<div class="codehilite">{head}'
+                f'<pre><code>{html.escape(text)}</code></pre></div>')
+
+
+_TOC_TAG_STRIP = re.compile(r'<[^>]+>')
 
 
 def build_toc(entries: list[tuple[int, str, str]]) -> str:
@@ -211,7 +241,9 @@ def build_toc(entries: list[tuple[int, str, str]]) -> str:
         while level > prev:
             lines.append('<ul>')
             prev += 1
-        lines.append(f'<li><a href="#{slug}">{text}</a>')
+        # #260828 Red 0.8.0 侧栏标题会被 ellipsis 截断，补 title 让悬停能看到全文
+        plain = _TOC_TAG_STRIP.sub('', text).replace('"', '&quot;')
+        lines.append(f'<li><a href="#{slug}" title="{plain}">{text}</a>')
     while prev > 2:
         lines.append('</ul></li>')
         prev -= 1
@@ -868,6 +900,9 @@ class Editor(QPlainTextEdit):
 
 class TrafficLights(QWidget):
     _COLORS = ('#ff5f57', '#febc2e', '#28c840')
+    # #260828 Red 0.8.0 QSS 不支持 opacity，原 pressed 态毫无反馈；改用实色深浅
+    _HOVER   = ('#ff7b74', '#fec95a', '#4dd45f')
+    _PRESSED = ('#d94f48', '#d99e26', '#22a836')
 
     def __init__(self, win: QMainWindow):
         super().__init__(win)
@@ -875,12 +910,13 @@ class TrafficLights(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(7)
         btns = []
-        for color in self._COLORS:
+        for color, hover, pressed in zip(self._COLORS, self._HOVER, self._PRESSED):
             btn = QPushButton()
             btn.setFixedSize(13, 13)
             btn.setStyleSheet(f"""
                 QPushButton {{ background: {color}; border-radius: 6px; border: none; }}
-                QPushButton:pressed {{ opacity: 0.7; }}
+                QPushButton:hover {{ background: {hover}; }}
+                QPushButton:pressed {{ background: {pressed}; }}
             """)
             btns.append(btn)
             layout.addWidget(btn)
@@ -910,16 +946,16 @@ class ThemeDots(QWidget):
         self.set_active('light')
 
     def set_active(self, active_theme: str):
+        # #260828 Red 0.8.0 环色跟随主题（QSS 不支持 box-shadow，原来那行描边从未生效）
+        ring_color = THEME_RING.get(active_theme, 'rgba(255,255,255,0.85)')
         for btn in self._btns:
-            sel    = btn._theme == active_theme  # type: ignore[attr-defined]
-            ring   = '2px solid rgba(255,255,255,0.85)' if sel else '2px solid transparent'
-            shadow = 'box-shadow: 0 0 0 1px rgba(0,0,0,0.3);' if sel else ''
+            sel  = btn._theme == active_theme  # type: ignore[attr-defined]
+            ring = f'2px solid {ring_color}' if sel else '2px solid transparent'
             btn.setStyleSheet(f"""
                 QPushButton {{
                     background: {btn._color};
                     border-radius: 8px;
                     border: {ring};
-                    {shadow}
                 }}
             """)
 
@@ -998,10 +1034,14 @@ class TitleBar(QWidget):
             }}
             QPushButton:hover   {{ background: rgba(128,128,128,0.15); }}
             QPushButton:pressed {{ background: rgba(128,128,128,0.25); }}
+            QPushButton:focus   {{ border: 1px solid #5b7cf7; }}
         """
         for btn in (self.btn_edit, self.btn_recent, self.btn_open):
             btn.setStyleSheet(self._btn_normal_style)
         self.theme_dots.set_active(theme)
+        # #260828 Red 0.8.0 编辑模式下切主题会被上面的普通样式顶掉激活态，这里补回
+        if getattr(self._win, '_edit_mode', False):
+            self.set_edit_active(True)
 
     def _show_recent_menu(self):
         recent = self._win.get_recent_files()
@@ -1032,16 +1072,18 @@ class TitleBar(QWidget):
     def set_edit_active(self, active: bool):
         """编辑模式时「编辑」按钮高亮。"""
         if active:
-            self.btn_edit.setStyleSheet("""
-                QPushButton {
-                    background: rgba(91,124,247,0.18);
-                    color: #3a5ad4;
+            # #260828 Red 0.8.0 文字色按主题取：原硬编码 #3a5ad4 在暗色/夜间只有 2.47/2.72
+            fg = THEME_EDIT_ACTIVE.get(self._win.theme, '#2d4bc4')
+            self.btn_edit.setStyleSheet(f"""
+                QPushButton {{
+                    background: rgba(91,124,247,0.16);
+                    color: {fg};
                     border: 1px solid rgba(91,124,247,0.55);
                     border-radius: 5px;
                     font-size: 12px;
                     font-weight: 600;
-                }
-                QPushButton:hover { background: rgba(91,124,247,0.28); }
+                }}
+                QPushButton:hover {{ background: rgba(91,124,247,0.28); }}
             """)
         else:
             # 恢复到 apply_theme 时存储的普通样式
