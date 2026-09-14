@@ -567,3 +567,15 @@ html.cream    #content mark { background: #f5d080; color: #2c1f0a; }
     scroll-behavior: auto !important;
   }
 }
+
+/* ── #260914 Red 0.8.1 打印适配 ── */
+/* min-height:100% + 正文底部 padding 会把内容顶出一页，打印尾部多一张空白页 */
+@media print {
+  html, body { height: auto; margin: 0; padding: 0; }
+  #layout { min-height: auto; display: block; }
+  #content { max-width: none; margin: 0; padding: 0; }
+  /* 复制按钮在纸面上无意义；标题不与正文断页；短代码块/引用/表格不拦腰截断 */
+  .code-copy { display: none; }
+  h1, h2, h3, h4, h5, h6 { break-after: avoid; }
+  pre, blockquote, table, img { break-inside: avoid; }
+}

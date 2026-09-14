@@ -19,6 +19,7 @@
 #//#260601 Red 0.6.0 mistune 替换 markdown 渲染引擎 / 自定义 TOC + 代码高亮渲染器
 #//#260601 Red 0.6.1 支持打开 .xmind 思维导图文件（Zen JSON + 旧版 XML 格式）/ 思维导图模式CSS
 #//#260601 Red 0.6.2 真毛玻璃：WA_TranslucentBackground + paintEvent半透明背景 + 标题栏/搜索栏/状态栏透明
+#//#260914 Red 0.8.1 导出 HTML / 系统打印（隐藏视图全量渲染，light 主题无 TOC）；修 _typograph 裸 pre 标签残留（0.6.5 起）
 
 import sys
 import os
@@ -56,7 +57,7 @@ from PySide6.QtGui import (
     QMouseEvent, QAction, QTextCursor, QTextDocument, QRegion, QDesktopServices, QMovie,
 )
 
-VERSION  = "0.8.0"
+VERSION  = "0.8.1"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 
@@ -272,11 +273,19 @@ _TAG_BLOCK = re.compile(
 
 def _typograph(text: str) -> str:
     """Apply typographic replacements outside code/pre/style blocks."""
-    parts = _TAG_BLOCK.split(text)
-    for i in range(0, len(parts), 2):
+    def apply(seg: str) -> str:
         for pattern, repl in _TYPOGRAPH:
-            parts[i] = re.sub(pattern, repl, parts[i])
-    return ''.join(parts)
+            seg = re.sub(pattern, repl, seg)
+        return seg
+    # 不能用 _TAG_BLOCK.split：pattern 内层组 (pre|code|...) 会被 split 一并插回，
+    # 字面 'pre' 落在奇数位被当受保护块拼回输出（0.6.5 起每个代码块后拖一个裸 pre）
+    out, last = [], 0
+    for mch in _TAG_BLOCK.finditer(text):
+        out.append(apply(text[last:mch.start()]))
+        out.append(mch.group(0))
+        last = mch.end()
+    out.append(apply(text[last:]))
+    return ''.join(out)
 
 
 # ── 块级拆分与渐进渲染 ─────────────────────────────────────────────────────────
@@ -1484,6 +1493,9 @@ class TypeRedWindow(QMainWindow):
         self._is_xmind        = False
         self._render_worker   = None
         self._chunked_worker  = None
+        self._print_view      = None   # 打印用隐藏 WebView（全量渲染）
+        self._print_printer   = None
+        self._print_tmp       = None
         self._tabs: list[_TabData] = []
         self._current_tab_idx = -1
         self._app_icon        = app_icon
@@ -1993,7 +2005,9 @@ class TypeRedWindow(QMainWindow):
         QShortcut(QKeySequence('Ctrl+T'),       self).activated.connect(self._cycle_theme)
         QShortcut(QKeySequence('Ctrl+F'),       self).activated.connect(self._toggle_search)
         QShortcut(QKeySequence('Ctrl+H'),       self).activated.connect(self._toggle_replace)
-        QShortcut(QKeySequence('Ctrl+P'),       self).activated.connect(self.export_pdf)
+        QShortcut(QKeySequence('Ctrl+P'),       self).activated.connect(self.print_document)
+        QShortcut(QKeySequence('Ctrl+Alt+P'),   self).activated.connect(self.export_pdf)
+        QShortcut(QKeySequence('Ctrl+Shift+E'), self).activated.connect(self.export_html)
         QShortcut(QKeySequence('Ctrl+R'),       self).activated.connect(self._reload_from_disk)
         QShortcut(QKeySequence('Ctrl+E'),       self).activated.connect(self.toggle_edit)
         QShortcut(QKeySequence('Ctrl+S'),       self).activated.connect(self.save_file)
@@ -2615,18 +2629,130 @@ class TypeRedWindow(QMainWindow):
             self.titlebar.lbl_title.setText(APP_NAME)
         self._update_tab_name()
 
-    # ── 导出 PDF ──────────────────────────────────────────────────────────────
+    # ── 导出 / 打印 ───────────────────────────────────────────────────────────
+
+    def _export_source_text(self) -> str | None:
+        """导出/打印共用的源文本，与 _update_preview 取值一致；无内容时提示并返回 None。"""
+        if self._edit_mode:
+            text = self._cached_text or self.editor.toPlainText()
+        else:
+            text = self._current_text
+        if not text and not self.current_file:
+            self.statusBar().showMessage('请先打开一个文件')
+            return None
+        return text
 
     def export_pdf(self):
-        if not self.current_file:
-            self.statusBar().showMessage('请先打开一个文件')
+        text = self._export_source_text()
+        if text is None:
             return
         self._ensure_view()
-        default = os.path.splitext(self.current_file)[0] + '.pdf'
+        default = os.path.splitext(self.current_file)[0] + '.pdf' if self.current_file else 'untitled.pdf'
         save_path, _ = QFileDialog.getSaveFileName(self, '导出 PDF', default, 'PDF 文件 (*.pdf)')
         if save_path and self.view:
             self.view.page().printToPdf(save_path)
             self.statusBar().showMessage(f'已导出：{save_path}')
+
+    def export_html(self):
+        """导出自包含 HTML：CSS/JS 内联，主题与 TOC 随当前预览。"""
+        text = self._export_source_text()
+        if text is None:
+            return
+        try:
+            body, toc = render_markdown(text)
+        except Exception as ex:
+            self.statusBar().showMessage(f'渲染失败：{ex}')
+            return
+        title = os.path.basename(self.current_file) if self.current_file else APP_NAME
+        page_html = build_page(body, toc, self.theme, title, is_xmind=self._is_xmind)
+        default = os.path.splitext(self.current_file)[0] + '.html' if self.current_file else 'untitled.html'
+        save_path, _ = QFileDialog.getSaveFileName(self, '导出 HTML', default, 'HTML 文件 (*.html)')
+        if not save_path:
+            return
+        try:
+            with open(save_path, 'w', encoding='utf-8') as f:
+                f.write(page_html)
+        except OSError as ex:
+            self.statusBar().showMessage(f'导出失败：{ex}')
+            return
+        self.statusBar().showMessage(f'已导出：{save_path}')
+
+    def print_document(self):
+        """系统打印。用隐藏 WebView 全量渲染（light 主题、无 TOC），
+        避免暗色主题打印白字、分块页漏打未加载部分。"""
+        from PySide6.QtPrintSupport import QPrintDialog, QPrinter
+        text = self._export_source_text()
+        if text is None:
+            return
+        if self._print_view is not None:
+            self.statusBar().showMessage('正在打印，请稍候')
+            return
+        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+        dlg = QPrintDialog(printer, self)
+        dlg.setWindowTitle(f'打印 — {APP_NAME}')
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            body, _toc = render_markdown(text)
+        except Exception as ex:
+            self.statusBar().showMessage(f'渲染失败：{ex}')
+            return
+        title = os.path.basename(self.current_file) if self.current_file else APP_NAME
+        page_html = build_page(body, '', 'light', title, is_xmind=self._is_xmind)
+        self._print_printer = printer
+        self._start_print_view(page_html)
+
+    def _start_print_view(self, page_html: str):
+        from PySide6.QtWebEngineWidgets import QWebEngineView
+        w = QWebEngineView()
+        w.setAttribute(Qt.WA_DontShowOnScreen, True)
+        w.resize(1000, 1400)
+        w.loadFinished.connect(self._on_print_view_ready)
+        w.printFinished.connect(self._on_print_finished)
+        self._print_view = w
+        self._print_tmp = None
+        if len(page_html) > 1_500_000:
+            # 同 _set_page_html：绕过 setHtml 2MB 限制，补 base href 保住相对图片
+            base_dir = (os.path.dirname(self.current_file) if self.current_file else BASE_DIR).replace('\\', '/')
+            page_html = page_html.replace('<head>', f'<head><base href="file:///{base_dir}/">', 1)
+            tmp = os.path.join(tempfile.gettempdir(), 'typered_print.html')
+            _cleanup_typered_tmp(tmp)
+            with open(tmp, 'w', encoding='utf-8') as f:
+                f.write(page_html)
+            self._print_tmp = tmp
+            w.load(QUrl.fromLocalFile(tmp))
+        else:
+            if self.current_file:
+                base_url = QUrl.fromLocalFile(os.path.dirname(self.current_file) + '/')
+            else:
+                base_url = QUrl(f'file:///{BASE_DIR}/')
+            w.setHtml(page_html, base_url)
+        w.show()
+
+    def _on_print_view_ready(self, ok: bool):
+        w = self._print_view
+        if w is None:
+            return
+        if not ok:
+            self._cleanup_print_view()
+            self.statusBar().showMessage('打印失败：页面加载失败')
+            return
+        self.statusBar().showMessage('正在打印…')
+        w.print(self._print_printer)
+
+    def _on_print_finished(self, ok: bool):
+        self._cleanup_print_view()
+        self.statusBar().showMessage('打印完成' if ok else '打印失败')
+
+    def _cleanup_print_view(self):
+        w = self._print_view
+        self._print_view = None
+        self._print_printer = None
+        if w is not None:
+            w.deleteLater()
+        if self._print_tmp:
+            _cleanup_typered_tmp(self._print_tmp)
+            self._print_tmp = None
 
     # ── 主题 ──────────────────────────────────────────────────────────────────
 
