@@ -20,6 +20,7 @@
 #//#260601 Red 0.6.1 支持打开 .xmind 思维导图文件（Zen JSON + 旧版 XML 格式）/ 思维导图模式CSS
 #//#260601 Red 0.6.2 真毛玻璃：WA_TranslucentBackground + paintEvent半透明背景 + 标题栏/搜索栏/状态栏透明
 #//#260914 Red 0.8.1 导出 HTML / 系统打印（隐藏视图全量渲染，light 主题无 TOC）；修 _typograph 裸 pre 标签残留（0.6.5 起）
+#//#260914 Red 0.8.2 预览/编辑器左右互换：渲染预览占据左侧主阅读位，编辑器移至右侧
 
 import sys
 import os
@@ -57,7 +58,7 @@ from PySide6.QtGui import (
     QMouseEvent, QAction, QTextCursor, QTextDocument, QRegion, QDesktopServices, QMovie,
 )
 
-VERSION  = "0.8.1"
+VERSION  = "0.8.2"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 
@@ -1550,8 +1551,9 @@ class TypeRedWindow(QMainWindow):
 
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.setHandleWidth(1)
-        self.splitter.addWidget(self.editor)
+        #260914 Red 0.8.2 预览在左、编辑器在右：渲染结果占据主阅读位更符合阅读习惯
         self.splitter.addWidget(self._welcome_page)
+        self.splitter.addWidget(self.editor)
 
         #260828 Red 第二参是 view，早先误传了 win 自己：WebView 懒加载完成前
         # _view 指向窗口，搜索栏任何 findText 分支都会 AttributeError 崩掉
@@ -1833,8 +1835,9 @@ class TypeRedWindow(QMainWindow):
         if not cw:
             return
         if self._edit_mode:
-            editor_w = self.splitter.widget(0).width()
-            x = editor_w + 8
+            #260914 Red widget(0) 现在是预览：猫猫贴编辑器左缘（分界线右侧）
+            editor_x = self.splitter.widget(0).width() + 8
+            x = editor_x
         else:
             x = 8
         self._cat_label.move(x, cw.height() - self._cat_label.height() - 8)
@@ -2411,7 +2414,8 @@ class TypeRedWindow(QMainWindow):
             if td:
                 td.text = text
             self.editor.setVisible(False)
-            self.splitter.setSizes([0, self.width()])
+            #260914 Red widget(0)=预览：退出编辑回到纯阅读，预览占满、编辑器清零
+            self.splitter.setSizes([self.width(), 0])
         self.titlebar.set_edit_active(self._edit_mode)
         if self._edit_mode:
             self._reposition_cat()
@@ -2447,7 +2451,7 @@ class TypeRedWindow(QMainWindow):
         cw = self.centralWidget()
         if cw:
             if self._edit_mode:
-                base_x = self.splitter.widget(0).width() + 8
+                base_x = self.splitter.widget(0).width() + 8  # 编辑器左缘（widget(0)=预览）
             else:
                 base_x = 8
             self._cat_label.move(int(base_x + offset), cw.height() - self._cat_label.height() - 8)
