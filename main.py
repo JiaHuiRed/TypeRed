@@ -77,6 +77,8 @@ SUPPORTED_EXTS = ('.md', '.markdown', '.mdown', '.txt', '.xmind')
 # 渐进渲染阈值：>50KB 启用分块，>256KB 异步渲染
 CHUNK_THRESHOLD = 50 * 1024
 CHUNK_INITIAL = 5  # 首屏渲染块数
+# QWebEngine setHtml has a 2 MiB limit after percent-encoding; leave headroom.
+MAX_SET_HTML_ENCODED_BYTES = 1_800_000
 
 # ── 主题定义 ──────────────────────────────────────────────────────────────────
 
@@ -2593,7 +2595,7 @@ class TypeRedWindow(QMainWindow):
     def _set_page_html(self, page_html: str):
         """统一 setHtml / load 分发，处理 Chromium 2MB 限制。"""
         try:
-            if len(page_html) > 1_500_000:
+            if len(QUrl.toPercentEncoding(page_html)) > MAX_SET_HTML_ENCODED_BYTES:
                 if self.current_file:
                     base_dir = os.path.dirname(self.current_file).replace('\\', '/')
                     base_tag = f'<base href="file:///{base_dir}/">'
@@ -2715,7 +2717,7 @@ class TypeRedWindow(QMainWindow):
         w.printFinished.connect(self._on_print_finished)
         self._print_view = w
         self._print_tmp = None
-        if len(page_html) > 1_500_000:
+        if len(QUrl.toPercentEncoding(page_html)) > MAX_SET_HTML_ENCODED_BYTES:
             # 同 _set_page_html：绕过 setHtml 2MB 限制，补 base href 保住相对图片
             base_dir = (os.path.dirname(self.current_file) if self.current_file else BASE_DIR).replace('\\', '/')
             page_html = page_html.replace('<head>', f'<head><base href="file:///{base_dir}/">', 1)
