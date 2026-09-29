@@ -160,7 +160,6 @@ class _TabData:
     is_xmind: bool = False
     nav_history: list = field(default_factory=list)
     nav_idx: int = -1
-    render_key = None          # _last_render_key 快照，切标签免重渲染
 
 
 # ── 程序化图标 ────────────────────────────────────────────────────────────────
@@ -1775,7 +1774,6 @@ class TypeRedWindow(QMainWindow):
             old.modified = self._modified
             old.nav_history = self._nav_history[:]
             old.nav_idx = self._nav_idx
-            old.render_key = self._last_render_key
 
         self._suspend_watcher()
         self._current_tab_idx = idx
@@ -1788,7 +1786,6 @@ class TypeRedWindow(QMainWindow):
             self._watcher.addPath(td.path)
         self._nav_history = td.nav_history[:]
         self._nav_idx = td.nav_idx
-        self._last_render_key = td.render_key
 
         if self._edit_mode:
             self.editor.set_text(td.text)
@@ -2526,7 +2523,14 @@ class TypeRedWindow(QMainWindow):
             return
         title = os.path.basename(self.current_file) if self.current_file else APP_NAME
         # 用 len+指纹 双重校验代替全文比较（hash() 跨进程不稳定）
-        key = (self.theme, title, len(text), _content_fingerprint(text))
+        document_key = (
+            os.path.normcase(os.path.abspath(self.current_file))
+            if self.current_file else id(self._tab())
+        )
+        key = (
+            self.theme, document_key, self._is_xmind, title,
+            len(text), _content_fingerprint(text),
+        )
         if key == self._last_render_key:
             self._sync_preview_from_cursor()
             return
