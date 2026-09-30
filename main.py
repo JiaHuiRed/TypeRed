@@ -2289,16 +2289,25 @@ class TypeRedWindow(QMainWindow):
         )
         if not path:
             return False
+        if self._is_xmind and os.path.splitext(path)[1].lower() == '.xmind':
+            path += '.md'
+        old_file = self.current_file
+        old_is_xmind = self._is_xmind
+        self._suspend_watcher()
         self.current_file = path
-        if path not in self._watcher.files():
-            self._watcher.addPath(path)
-        text = self.editor.toPlainText()
+        text = self.editor.toPlainText() if self._edit_mode else self._current_text
         try:
             with open(path, 'w', encoding='utf-8') as f:
                 f.write(text)
         except Exception as ex:
+            self.current_file = old_file
+            self._is_xmind = old_is_xmind
+            self._resume_watcher()
             self.statusBar().showMessage(f'保存失败：{ex}')
             return False
+        #260930 Red addPath 对不存在的路径不生效，必须等文件写出来后再挂监听
+        if path not in self._watcher.files():
+            self._watcher.addPath(path)
         self._current_text = text
         self._modified     = False
         td = self._tab()
