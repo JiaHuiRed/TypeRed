@@ -270,7 +270,7 @@ _TYPOGRAPH = [
 ]
 
 _TAG_BLOCK = re.compile(
-    r'(<(pre|code|style|script)[^>]*>.*?</\2>)',
+    r'(<(?:pre|code|style|script)\b[^>]*>.*?</(?:pre|code|style|script)>)',
     re.DOTALL | re.IGNORECASE,
 )
 
@@ -301,6 +301,10 @@ def _chunk_rendered_html(body: str, chunk_size: int = 30) -> list[str]:
     """
     TOP_TAGS = {'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'div', 'pre',
                 'ul', 'ol', 'blockquote', 'table', 'hr', 'figure', 'dl'}
+    VOID_TAGS = {
+        'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link',
+        'meta', 'param', 'source', 'track', 'wbr',
+    }
     any_tag = re.compile(r'<(/?)(\w+)[^>]*?(/?)>')
 
     stack: list[str] = []
@@ -317,6 +321,9 @@ def _chunk_rendered_html(body: str, chunk_size: int = 30) -> list[str]:
                 stack.pop()
                 if not stack:
                     split_points.append(match.end())
+        elif is_self_closing or tag in VOID_TAGS:
+            if not stack:
+                split_points.append(match.end())
         elif not is_self_closing:
             if not stack:
                 # 新顶层元素开始 —— split_points 已在前面记录
@@ -449,7 +456,7 @@ class _ChunkedRenderWorker(QThread):
             initial, remaining, toc = (
                 f'<p style="color:red">渲染失败：{html.escape(str(ex))}</p>', '[]', ''
             )
-        self.finished.emit(initial, remaining, toc)
+        self.finished.emit(self._request_id, initial, remaining, toc)
 
 
 _PYG_CACHE: dict[str, str] = {}
@@ -1318,7 +1325,11 @@ class SearchBar(QWidget):
             pattern = r'\b' + re.escape(find_text) + r'\b'
         else:
             pattern = re.escape(find_text)
-        new_text, count = re.subn(pattern, replace_text, text, flags=flags)
+        try:
+            new_text, count = re.subn(pattern, replace_text, text, flags=flags)
+        except re.error as ex:
+            self._win.statusBar().showMessage(f'替换失败：{ex}')
+            return
         if count == 0:
             self._win.statusBar().showMessage('未找到匹配项')
             return
@@ -1529,6 +1540,8 @@ class TypeRedWindow(QMainWindow):
         self._print_view      = None   # 打印用隐藏 WebView（全量渲染）
         self._print_printer   = None
         self._print_tmp       = None
+        self._chunked_workers: list[_ChunkedRenderWorker] = []
+        self._render_generation = 0
         self._tabs: list[_TabData] = []
         self._current_tab_idx = -1
         self._app_icon        = app_icon
@@ -1614,7 +1627,7 @@ class TypeRedWindow(QMainWindow):
         self.tab_bar.setMovable(True)
         self.tab_bar.setDocumentMode(True)
         self.tab_bar.setExpanding(False)
-        self.tab_bar.tabMoved.connect(self._rewire_close_btns)
+        self.tab_bar.tabMoved.connect(self._on_tab_moved)
         self.tab_bar.currentChanged.connect(self._on_tab_changed)
         layout.addWidget(self.tab_bar)
 
@@ -1742,6 +1755,20 @@ class TypeRedWindow(QMainWindow):
         for i in range(self.tab_bar.count()):
             self._setup_close_btn(i)
 
+    def _on_tab_moved(self, from_idx: int, to_idx: int):
+        """同步标签栏的视觉顺序与内部数据顺序。"""
+        if from_idx == to_idx or not (0 <= from_idx < len(self._tabs)):
+            return
+        tab_data = self._tabs.pop(from_idx)
+        self._tabs.insert(to_idx, tab_data)
+        if self._current_tab_idx == from_idx:
+            self._current_tab_idx = to_idx
+        elif from_idx < self._current_tab_idx <= to_idx:
+            self._current_tab_idx -= 1
+        elif to_idx <= self._current_tab_idx < from_idx:
+            self._current_tab_idx += 1
+        self._rewire_close_btns()
+
     def _close_tab(self, idx: int):
         """关闭指定索引的标签页。"""
         if not (0 <= idx < len(self._tabs)):
@@ -1820,6 +1847,8 @@ class TypeRedWindow(QMainWindow):
 
         if self._edit_mode:
             self.editor.set_text(td.text)
+        self._cached_text = td.text
+        self.editor.setReadOnly(td.is_xmind)
 
         self._update_preview()
         self._update_title()
@@ -1968,6 +1997,7 @@ class TypeRedWindow(QMainWindow):
         unsaved = [i for i, td in enumerate(self._tabs) if td.modified]
         if not unsaved:
             self._save_state()
+            self._stop_chunked_workers()
             super().closeEvent(e)
             return
 
@@ -1994,6 +2024,7 @@ class TypeRedWindow(QMainWindow):
             # Discard → 继续下一个
 
         self._save_state()
+        self._stop_chunked_workers()
         super().closeEvent(e)
 
 
@@ -2161,6 +2192,7 @@ class TypeRedWindow(QMainWindow):
         return md.replace('__APP_NAME__', APP_NAME).replace('__VERSION__', VERSION)
 
     def _show_welcome(self):
+        self._render_generation += 1
         welcome_md = self._load_welcome_md()
         if not welcome_md:
             return
@@ -2233,8 +2265,15 @@ class TypeRedWindow(QMainWindow):
                 with open(path, encoding='utf-8-sig') as f:
                     text = f.read()
             except UnicodeDecodeError:
-                with open(path, encoding='gbk', errors='replace') as f:
-                    text = f.read()
+                try:
+                    with open(path, encoding='gbk', errors='replace') as f:
+                        text = f.read()
+                except OSError as ex:
+                    self.statusBar().showMessage(f'打开失败：{ex}')
+                    return
+            except OSError as ex:
+                self.statusBar().showMessage(f'打开失败：{ex}')
+                return
             td.is_xmind = False
 
         # 在存储/渲染前一次性完成 emoji 短代码替换，避免每次渲染重复处理
@@ -2263,6 +2302,8 @@ class TypeRedWindow(QMainWindow):
 
         if self._edit_mode:
             self.editor.set_text(text)
+        self._cached_text = text
+        self.editor.setReadOnly(td.is_xmind)
 
         self._update_preview()
         self._update_title()
@@ -2272,6 +2313,9 @@ class TypeRedWindow(QMainWindow):
 
     def save_file(self):
         if not self._edit_mode:
+            return
+        if self._is_xmind:
+            self.statusBar().showMessage('XMind 导入内容为只读，请使用另存为导出 Markdown')
             return
         # 无当前文件则另存为
         if not self.current_file:
@@ -2329,10 +2373,16 @@ class TypeRedWindow(QMainWindow):
             td.path = path
             td.text = text
             td.modified = False
+            td.is_xmind = False
+        self._cached_text = text
+        self._is_xmind = False
+        self.editor.setReadOnly(False)
+        self._last_render_key = None
         self._update_title()
         self._update_tab_name()
         self._add_recent(path)
         self._update_status_bar()
+        self._update_preview()
         self.statusBar().showMessage(f'已保存：{path}')
         self._toast.show_message(f'已保存：{os.path.basename(path)}')
         return True
@@ -2363,9 +2413,12 @@ class TypeRedWindow(QMainWindow):
         self._current_text = ''
         self._modified     = False
         self._is_xmind     = False
+        self._cached_text = ''
+        self._last_render_key = None
 
         self._edit_mode = True
         self.editor.set_text('')
+        self.editor.setReadOnly(False)
         self.editor.setVisible(True)
         self.splitter.setSizes([self.width() // 2, self.width() // 2])
         self.editor.setFocus()
@@ -2373,6 +2426,7 @@ class TypeRedWindow(QMainWindow):
         self._update_title()
         self._update_tab_name()
         self._update_status_bar()
+        self._update_preview()
         self._reposition_cat()
         self._cat_movie.start()
 
@@ -2430,6 +2484,8 @@ class TypeRedWindow(QMainWindow):
                 self._watcher.addPath(path)
             return
         # 显示提示而非静默覆盖
+        if path not in self._watcher.files():
+            self._watcher.addPath(path)
         self.statusBar().showMessage(
             '文件已被外部修改 — Ctrl+R 刷新', 8000
         )
@@ -2438,9 +2494,14 @@ class TypeRedWindow(QMainWindow):
 
     def toggle_edit(self):
         self.search_bar.hide_bar()
+        if not self._edit_mode and self._is_xmind:
+            self.statusBar().showMessage('XMind 导入内容为只读，请使用另存为导出 Markdown')
+            return
         if not self._edit_mode:
             self._edit_mode = True
             self.editor.set_text(self._current_text)  # 无文件时为空白
+            self._cached_text = self._current_text
+            self.editor.setReadOnly(False)
             self.editor.setVisible(True)
             w = self.width()
             self.splitter.setSizes([w // 2, w // 2])
@@ -2449,6 +2510,7 @@ class TypeRedWindow(QMainWindow):
             self._edit_mode = False
             text = self._cached_text or self.editor.toPlainText()
             self._current_text = text
+            self._cached_text = text
             td = self._tab()
             if td:
                 td.text = text
@@ -2560,6 +2622,10 @@ class TypeRedWindow(QMainWindow):
         else:
             text = self._current_text
         if not text and not self.current_file:
+            self._render_generation += 1
+            self._last_render_key = None
+            if self.view:
+                self._set_page_html(build_page('', '', self.theme, APP_NAME))
             return
         title = os.path.basename(self.current_file) if self.current_file else APP_NAME
         # 用 len+指纹 双重校验代替全文比较（hash() 跨进程不稳定）
@@ -2575,6 +2641,8 @@ class TypeRedWindow(QMainWindow):
             self._sync_preview_from_cursor()
             return
         self._last_render_key = key
+        self._render_generation += 1
+        request_id = self._render_generation
         if self._edit_mode:
             self._pending_scroll_ratio = self.editor.textCursor().position() / max(len(text), 1)
         else:
@@ -2590,11 +2658,12 @@ class TypeRedWindow(QMainWindow):
         #   中文件 50K-256K → 同步分块渲染（首屏快）
         #   大文件 >256KB  → 后台线程分块渲染（UI 不冻结）
         if len(text) > 256 * 1024:
-            self._start_chunked_async_render(text, title)
+            self._start_chunked_async_render(text, title, request_id)
         elif len(text) > CHUNK_THRESHOLD:
             try:
                 body, remaining, toc = render_chunked(text, initial_chunks=CHUNK_INITIAL)
             except Exception as ex:
+                self._last_render_key = None
                 self._loading_overlay.hide()
                 self.statusBar().showMessage(f'渲染失败：{ex}')
                 return
@@ -2603,22 +2672,40 @@ class TypeRedWindow(QMainWindow):
             try:
                 body, toc = render_markdown(text)
             except Exception as ex:
+                self._last_render_key = None
                 self._loading_overlay.hide()
                 self.statusBar().showMessage(f'渲染失败：{ex}')
                 return
             self._apply_render_result(body, toc, title)
 
-    def _start_chunked_async_render(self, text: str, title: str):
+    def _start_chunked_async_render(self, text: str, title: str, request_id: int):
         """后台线程分块渲染，避免大文件阻塞 UI。"""
         old = self._chunked_worker
         if old is not None and old.isRunning():
-            old.finished.disconnect()
+            old.requestInterruption()
             old.quit()
-            old.wait(200)
-        worker = _ChunkedRenderWorker(text, title, parent=self)
+        worker = _ChunkedRenderWorker(text, title, request_id, parent=self)
         worker.finished.connect(self._on_chunked_render_done)
+        worker.finished.connect(lambda *_, w=worker: self._forget_chunked_worker(w))
+        self._chunked_workers.append(worker)
         self._chunked_worker = worker
         worker.start()
+
+    def _forget_chunked_worker(self, worker):
+        if worker in self._chunked_workers:
+            self._chunked_workers.remove(worker)
+        if worker is self._chunked_worker and not worker.isRunning():
+            self._chunked_worker = None
+
+    def _stop_chunked_workers(self):
+        workers = self._chunked_workers[:]
+        self._chunked_workers.clear()
+        self._chunked_worker = None
+        for worker in workers:
+            if worker.isRunning():
+                worker.requestInterruption()
+                worker.quit()
+                worker.wait()
 
     def _apply_render_result(self, body, toc, title):
         """应用全量渲染结果到 WebView（0.7.6 旧路径）。"""
@@ -2663,8 +2750,10 @@ class TypeRedWindow(QMainWindow):
         if self._pending_scroll_ratio is not None:
             QTimer.singleShot(120, self._sync_preview_scroll)
 
-    def _on_chunked_render_done(self, body: str, remaining: str, toc: str):
+    def _on_chunked_render_done(self, request_id: int, body: str, remaining: str, toc: str):
         """后台分块渲染完成，自动读取标题。"""
+        if request_id != self._render_generation:
+            return
         title = os.path.basename(self.current_file) if self.current_file else APP_NAME
         self._apply_chunked_result(body, remaining, toc, title)
 
