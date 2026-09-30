@@ -406,6 +406,21 @@ def _json_safe_embed(s: str) -> str:
     return re.sub(r'</script>', r'<\\/script>', s, flags=re.IGNORECASE).replace('<!--', '<\\!--')
 
 
+def _atomic_write(path: str, text: str):
+    """260930 Red 先写同目录临时文件再原子替换，避免写一半损坏磁盘上的最后一份拷贝。"""
+    tmp = path + '.typered.tmp'
+    try:
+        with open(tmp, 'w', encoding='utf-8') as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
 class _ChunkedRenderWorker(QThread):
     """后台线程执行分块 Markdown 渲染（全量 → 切块 → 渐进加载）。"""
     finished = Signal(int, str, str, str)  # request_id, initial_body, remaining_json, toc
@@ -2265,8 +2280,7 @@ class TypeRedWindow(QMainWindow):
         text = self.editor.toPlainText()
         try:
             self._suspend_watcher()
-            with open(self.current_file, 'w', encoding='utf-8') as f:
-                f.write(text)
+            _atomic_write(self.current_file, text)
         except Exception as ex:
             self._resume_watcher()
             self.statusBar().showMessage(f'保存失败：{ex}')
@@ -2372,10 +2386,11 @@ class TypeRedWindow(QMainWindow):
         text = self.editor.toPlainText()
         try:
             self._suspend_watcher()
-            with open(self.current_file, 'w', encoding='utf-8') as f:
-                f.write(text)
-        except Exception:
+            _atomic_write(self.current_file, text)
+        except Exception as ex:
             self._resume_watcher()
+            #260930 Red 自动保存失败不再静默吞掉，至少给一条可见提示
+            self.statusBar().showMessage(f'自动保存失败：{ex}', 4000)
             return
         self._resume_watcher()
         self._skip_next_watch = True
