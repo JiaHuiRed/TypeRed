@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 echo [1/3] Generating icon...
-python make_icon.py
+py -3.14 make_icon.py
 if errorlevel 1 (
     echo Failed to generate icon.
     pause
@@ -9,7 +9,7 @@ if errorlevel 1 (
 )
 
 echo [2/3] Generating version info...
-python make_version.py
+py -3.14 make_version.py
 if errorlevel 1 (
     echo Failed to generate version info.
     pause
@@ -17,13 +17,18 @@ if errorlevel 1 (
 )
 
 echo [3/3] Building exe...
-pyinstaller --onedir --windowed --noconfirm --name TypeRed --icon TypeRed.ico --version-file version.txt --add-data "frontend/style.css;frontend" --add-data "frontend/script.js;frontend" --add-data "frontend/welcome.md;frontend" --add-data "frontend/mona-loading.gif;frontend" --noupx --clean main.py
+py -3.14 -m PyInstaller --distpath dist --workpath build --noconfirm --clean TypeRed.spec
 if errorlevel 1 (
     echo Build failed.
     pause
     exit /b 1
 )
 
+rem PyInstaller can pick up an incompatible ICU DLL from the build machine's PATH.
+rem PySide6 uses the Windows ICU on this target, so remove only those accidental copies.
+if exist "dist\TypeRed\_internal\icuuc.dll" del /q "dist\TypeRed\_internal\icuuc.dll"
+if exist "dist\TypeRed\_internal\icudt78.dll" del /q "dist\TypeRed\_internal\icudt78.dll"
+
 echo.
-echo Done! Output: dist\TypeRed.exe
+echo Done! Output: dist\TypeRed\TypeRed.exe
 pause

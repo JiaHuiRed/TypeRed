@@ -26,3 +26,11 @@ Thumbs.db
 # Build artifacts
 splash.png
 version.txt
+
+# Local agent memory and telemetry
+.redcode/
+
+# Local analysis artifacts (session work notes, not source)
+OPTIMIZE.md
+analysis_*.txt
+main_decoded.txt

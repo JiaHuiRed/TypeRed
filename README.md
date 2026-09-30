@@ -49,10 +49,10 @@ TypeRed 是一个轻量级本地 Markdown 阅读 / 编辑器，基于 **PySide6 
 ## 🚀 快捷使用
 
 ```bash
-pip install -r requirements.txt
-python main.py                          # 打开应用
-python main.py path/to/file.md          # 直接打开文件
-python main.py path/to/file.xmind       # 打开思维导图
+py -3.14 -m pip install -r requirements.txt
+py -3.14 main.py                        # 打开应用
+py -3.14 main.py path/to/file.md        # 直接打开文件
+py -3.14 main.py path/to/file.xmind     # 打开思维导图
 ```
 
 ## 📦 打包 exe
@@ -61,7 +61,12 @@ python main.py path/to/file.xmind       # 打开思维导图
 build.bat
 ```
 
-输出 `dist/TypeRed.exe`（单文件，无需 Python 环境）。首次需要 `pip install pyinstaller`。
+输出 `dist/TypeRed/TypeRed.exe`（目录版，目标机器无需 Python 环境）。构建依赖统一使用 Python 3.14：
+
+```bat
+py -3.14 -m pip install -r requirements.txt
+build.bat
+```
 
 ## ⌨️ 快捷键
 
