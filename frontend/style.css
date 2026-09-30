@@ -216,6 +216,8 @@ html.cream #toc {
 #content h2:hover .headerlink,
 #content h3:hover .headerlink,
 #content h4:hover .headerlink { opacity: 1; }
+/*260930 Red 键盘聚焦锚点时也要可见，不能只靠 hover */
+#content .headerlink:focus-visible { opacity: 1; }
 
 /* ── 段落/链接 ── */
 #content p  { margin: 0.8em 0; }
