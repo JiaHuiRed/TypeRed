@@ -158,6 +158,8 @@ html.cream #toc {
   display: block;
   padding: 2px 4px;
   border-radius: 4px;
+  /*260930 Red 常态留透明左边框，激活时只变色不移位 */
+  border-left: 2px solid transparent;
   transition: color 0.15s, background 0.15s;
   overflow: hidden;
   text-overflow: ellipsis;
