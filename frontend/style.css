@@ -14,7 +14,7 @@ html.light {
   --border:      #e1e4e8;
   --code-bg:     #f0f2f4;
   --code-text:   #24292f;
-  --blockquote:  #6a737d;
+  --blockquote:  #57606a;
   --bq-border:   #d0d7de;
   --th-bg:       #f0f2f4;
   --scrollbar:   #ccc;
@@ -29,7 +29,7 @@ html.dark {
   --border:      #2a2b3d;
   --code-bg:     #1e1f2e;
   --code-text:   #c0caf5;
-  --blockquote:  #787c99;
+  --blockquote:  #969cba;
   --bq-border:   #3b3d57;
   --th-bg:       #1e1f2e;
   --scrollbar:   #3b3d57;
@@ -45,7 +45,7 @@ html.eye-care {
   --border:      #bcd8bc;
   --code-bg:     #deeede;
   --code-text:   #1a2e1a;
-  --blockquote:  #4a6e4a;
+  --blockquote:  #3d5c3d;
   --bq-border:   #9cc49c;
   --th-bg:       #d8ead8;
   --scrollbar:   #9cc49c;
@@ -61,7 +61,7 @@ html.cream {
   --border:      #e0c898;
   --code-bg:     #ede4c8;
   --code-text:   #2c1f0a;
-  --blockquote:  #7a5e28;
+  --blockquote:  #6b5122;
   --bq-border:   #c8a060;
   --th-bg:       #e8d8b0;
   --scrollbar:   #c8a060;
@@ -77,7 +77,7 @@ html.night {
   --border:      #222222;
   --code-bg:     #141414;
   --code-text:   #cccccc;
-  --blockquote:  #666666;
+  --blockquote:  #909090;
   --bq-border:   #333333;
   --th-bg:       #161616;
   --scrollbar:   #333333;
