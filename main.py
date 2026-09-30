@@ -31,6 +31,7 @@ import ctypes
 import tempfile
 import json
 import hashlib
+import secrets
 from dataclasses import dataclass, field
 
 
@@ -532,10 +533,14 @@ def build_page(body: str, toc: str, theme: str, title: str = '', is_xmind: bool 
     js_content = _load_js()
     toc_block = f'<nav id="toc">{toc}</nav><div id="toc-resize"></div>' if toc.strip() else ''
     extra_class = f' mindmap' if is_xmind else ''
+    #260930 Red 每页随机 nonce：只有内置脚本放行，正文里的原生 <script>/事件属性一律被 CSP 拦截
+    nonce = secrets.token_hex(16)
+    csp = f"script-src 'nonce-{nonce}'; object-src 'none'"
     return f"""<!DOCTYPE html>
 <html class="{theme}{extra_class}">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="{csp}">
 <title>{title}</title>
 <style>{css_content}</style>
 <style>{pygments_css(theme)}</style>
@@ -545,7 +550,7 @@ def build_page(body: str, toc: str, theme: str, title: str = '', is_xmind: bool 
   {toc_block}
   <article id="content">{body}</article>
 </div>
-<script>{js_content}</script>
+<script nonce="{nonce}">{js_content}</script>
 </body>
 </html>"""
 
@@ -553,7 +558,7 @@ def build_page(body: str, toc: str, theme: str, title: str = '', is_xmind: bool 
 # ── 分块页面生成（渐进加载）────────────────────────────────────────────────
 
 _CHUNKED_JS = r"""
-<script>
+<script nonce="%NONCE%">
 (function(){
 'use strict';
 var chunks = %CHUNKS_JSON%;
@@ -610,12 +615,15 @@ def build_chunked_page(initial_body: str, remaining_json: str, toc: str, theme: 
     css_content = _load_css()
     js_content = _load_js()
     toc_block = f'<nav id="toc">{toc}</nav><div id="toc-resize"></div>' if toc.strip() else ''
-    # 注入分块 JS（替换占位符，防止 </script> 提前闭合标签）
-    loader = _CHUNKED_JS.replace('%CHUNKS_JSON%', _json_safe_embed(remaining_json))
+    # 注入分块 JS（先换 nonce 再嵌 JSON，防止 </script> 提前闭合标签）
+    nonce = secrets.token_hex(16)
+    csp = f"script-src 'nonce-{nonce}'; object-src 'none'"
+    loader = _CHUNKED_JS.replace('%NONCE%', nonce).replace('%CHUNKS_JSON%', _json_safe_embed(remaining_json))
     return f"""<!DOCTYPE html>
 <html class="{theme}">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="{csp}">
 <title>{title}</title>
 <style>{css_content}</style>
 <style>{pygments_css(theme)}</style>
@@ -629,7 +637,7 @@ def build_chunked_page(initial_body: str, remaining_json: str, toc: str, theme: 
   <article id="content">{initial_body}</article>
 </div>
 <div id="content-loading" style="display:{'none' if remaining_json == '[]' else 'block'}">加载中…</div>
-<script>{js_content}</script>
+<script nonce="{nonce}">{js_content}</script>
 {loader}
 </body>
 </html>"""
