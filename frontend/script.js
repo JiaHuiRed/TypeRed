@@ -1,5 +1,5 @@
 /* author Red */
-/* TypeRed — Markdown Reader & Editor v0.8.0 — 事件委托版 */
+/* TypeRed — Markdown Reader & Editor v0.8.3 — 事件委托版 */
 /* 使用事件委托支持动态加载的内容块 */
 
 (function() {

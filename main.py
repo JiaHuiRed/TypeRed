@@ -1,5 +1,5 @@
 # author Red
-# TypeRed — Markdown Reader & Editor v0.8.0
+# TypeRed — Markdown Reader & Editor v0.8.3
 #//#260518 Red 0.3.0 编辑模式/实时预览/Markdown格式快捷键/上下标高亮渲染
 #//#260518 Red 0.3.1 欢迎页详细化/修复代码围栏嵌套渲染/README补全快捷键
 #//#260518 Red 0.3.2 pygments_css缓存/字数统计/编辑模式Ctrl+F指向编辑区
@@ -21,6 +21,7 @@
 #//#260601 Red 0.6.2 真毛玻璃：WA_TranslucentBackground + paintEvent半透明背景 + 标题栏/搜索栏/状态栏透明
 #//#260914 Red 0.8.1 导出 HTML / 系统打印（隐藏视图全量渲染，light 主题无 TOC）；修 _typograph 裸 pre 标签残留（0.6.5 起）
 #//#260914 Red 0.8.2 预览/编辑器左右互换：渲染预览占据左侧主阅读位，编辑器移至右侧
+#//#260930 Red 0.8.3 修超大文件预览白屏与多标签预览错页，预览页 CSP 脚本隔离，原子保存/渲染取消/目录高亮等健壮性修复
 
 import sys
 import os
@@ -59,7 +60,7 @@ from PySide6.QtGui import (
     QMouseEvent, QAction, QTextCursor, QTextDocument, QRegion, QDesktopServices, QMovie,
 )
 
-VERSION  = "0.8.2"
+VERSION  = "0.8.3"
 APP_NAME = "TypeRed"
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 
