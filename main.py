@@ -403,22 +403,30 @@ def _content_fingerprint(text: str) -> str:
 
 def _json_safe_embed(s: str) -> str:
     """将 JSON 字符串安全嵌入 HTML <script> 标签内。"""
-    return s.replace('</script>', '<\\/script>').replace('<!--', '<\\!--')
+    return re.sub(r'</script>', r'<\\/script>', s, flags=re.IGNORECASE).replace('<!--', '<\\!--')
 
 
 class _ChunkedRenderWorker(QThread):
     """后台线程执行分块 Markdown 渲染（全量 → 切块 → 渐进加载）。"""
-    finished = Signal(str, str, str)  # initial_body, remaining_json, toc
+    finished = Signal(int, str, str, str)  # request_id, initial_body, remaining_json, toc
 
-    def __init__(self, text: str, title: str, parent=None):
+    def __init__(self, text: str, title: str, request_id: int, parent=None):
         super().__init__(parent)
         self._text = text
         self._title = title
+        self._request_id = request_id
 
     def run(self):
         try:
+            #260930 Red 分阶段响应中断：被新渲染取代后不再烧 CPU 跑完旧任务
+            if self.isInterruptionRequested():
+                return
             full_body, toc = _render_to_body_toc(self._text, own_md=True)
+            if self.isInterruptionRequested():
+                return
             chunks = _chunk_rendered_html(full_body)
+            if self.isInterruptionRequested():
+                return
             initial = '\n'.join(chunks[:CHUNK_INITIAL])
             remaining = json.dumps(chunks[CHUNK_INITIAL:])
         except Exception as ex:
