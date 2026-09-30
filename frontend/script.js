@@ -23,27 +23,42 @@
     });
   }
 
-  // ── TOC 当前标题高亮（IntersectionObserver） ──
+  // ── TOC 当前标题高亮（IntersectionObserver，覆盖分块后插入的标题） ──
   (function() {
     var tocLinks = toc ? toc.querySelectorAll('a[href^="#"]') : [];
     if (!tocLinks.length) return;
-    var headings = [];
+    var linkById = {};
     tocLinks.forEach(function(a) {
       var id = a.getAttribute('href').replace(/.*#/, '');
-      var el = document.getElementById(id);
-      if (el) headings.push({el: el, link: a});
+      linkById[id] = a;
     });
-    if (!headings.length) return;
+    var activeLink = null;
+    function activate(link) {
+      if (activeLink === link) return;
+      if (activeLink) activeLink.classList.remove('active');
+      activeLink = link;
+      if (link) link.classList.add('active');
+    }
     var observer = new IntersectionObserver(function(entries) {
       entries.forEach(function(entry) {
-        if (entry.isIntersecting) {
-          tocLinks.forEach(function(a) { a.classList.remove('active'); });
-          var h = headings.find(function(h) { return h.el === entry.target; });
-          if (h) h.link.classList.add('active');
-        }
+        if (entry.isIntersecting) activate(linkById[entry.target.id]);
       });
     }, {rootMargin: '-64px 0px -60% 0px'});
-    headings.forEach(function(h) { observer.observe(h.el); });
+    function watch(el) {
+      if (el.__tocObserved || !linkById[el.id]) return;
+      el.__tocObserved = true;
+      observer.observe(el);
+    }
+    var HEADING_SEL = '#content h1, #content h2, #content h3, #content h4, #content h5, #content h6';
+    function watchAll() {
+      document.querySelectorAll(HEADING_SEL).forEach(watch);
+    }
+    watchAll();
+    //260930 Red 分块加载会陆续插入标题，用 MutationObserver 补挂观察器
+    var content = document.getElementById('content');
+    if (content) {
+      new MutationObserver(watchAll).observe(content, {childList: true, subtree: true});
+    }
   })();
 
   // ── TOC 拖拽调整宽度 ──
